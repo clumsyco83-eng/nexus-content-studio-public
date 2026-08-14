@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { GoalTaskApprovalRepository } from '../goals/task-approvals.js';
+import { EmergencyStopStore } from '../safety/emergency-stop.js';
 import { createNexusStore } from '../storage/factory.js';
 import { NexusRepository } from '../storage/repository.js';
 import { buildDashboardSnapshot } from './dashboard-service.js';
@@ -15,6 +16,7 @@ const token = process.env.NEXUS_DASHBOARD_TOKEN ?? '';
 const store = createNexusStore();
 const repo = new NexusRepository(store);
 const goalApprovals = new GoalTaskApprovalRepository(store);
+const emergencyStop = new EmergencyStopStore();
 
 function send(res: ServerResponse, status: number, body: unknown, type = 'application/json; charset=utf-8') {
   res.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' });
@@ -94,6 +96,27 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/dashboard') return send(res, 200, await dashboardData());
     if (req.method === 'GET' && url.pathname === '/api/goals') return send(res, 200, await goalDashboardData());
     if (req.method === 'GET' && url.pathname === '/api/guardian') return send(res, 200, await guardianData());
+    if (req.method === 'GET' && url.pathname === '/api/build-mode') {
+      return send(res, 200, await goalApprovals.getMillionDollarBuildModeStatus());
+    }
+    if (req.method === 'POST' && url.pathname === '/api/build-mode/activate') {
+      if (await emergencyStop.isActive()) {
+        return send(res, 409, { error: 'Emergency stop is active. Build Mode cannot be activated.' });
+      }
+      const guardian = await guardianData();
+      if (guardian.health.status !== 'GREEN' || guardian.health.watchdogOk !== true) {
+        return send(res, 409, {
+          error: 'Guardian and Watchdog must both be healthy before Million-Dollar Build Mode can be activated.',
+          guardianStatus: guardian.health.status,
+          watchdogOk: guardian.health.watchdogOk,
+        });
+      }
+      const result = await goalApprovals.activateMillionDollarBuildMode('owner-dashboard');
+      return send(res, 200, result);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/build-mode/deactivate') {
+      return send(res, 200, await goalApprovals.deactivateMillionDollarBuildMode('owner-dashboard'));
+    }
     if (req.method === 'GET' && url.pathname === '/api/goal-approvals') {
       return send(res, 200, { approvals: await goalApprovals.listPending() });
     }
@@ -127,13 +150,19 @@ const server = createServer(async (req, res) => {
       const script = await readFile(path.resolve('dashboard/capability-readiness.js'), 'utf8');
       return send(res, 200, script, 'application/javascript; charset=utf-8');
     }
+    if (req.method === 'GET' && url.pathname === '/million-dollar-build-mode.js') {
+      const script = await readFile(path.resolve('dashboard/million-dollar-build-mode.js'), 'utf8');
+      return send(res, 200, script, 'application/javascript; charset=utf-8');
+    }
 
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/index.html')) {
       const baseHtml = await readFile(path.resolve('dashboard/index.html'), 'utf8');
-      const enhancement = '<script src="/capability-readiness.js"></script>';
-      const html = baseHtml.includes(enhancement)
-        ? baseHtml
-        : baseHtml.replace('</body>', `${enhancement}</body>`);
+      const enhancements = [
+        '<script src="/capability-readiness.js"></script>',
+        '<script src="/million-dollar-build-mode.js"></script>',
+      ];
+      const missing = enhancements.filter((item) => !baseHtml.includes(item)).join('');
+      const html = missing ? baseHtml.replace('</body>', `${missing}</body>`) : baseHtml;
       return send(res, 200, html, 'text/html; charset=utf-8');
     }
 
