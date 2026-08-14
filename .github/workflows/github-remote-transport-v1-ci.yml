@@ -1,0 +1,143 @@
+name: GitHub Remote Transport v1 CI
+
+on:
+  pull_request:
+    paths:
+      - 'src/remote-transport/**'
+      - 'src/powershell-broker/**'
+      - 'src/testing/github-remote-transport.ts'
+      - 'src/testing/github-remote-maintenance.ts'
+      - 'scripts/powershell-broker-v1.ps1'
+      - 'scripts/run-nexus-remote-github-worker.ps1'
+      - 'scripts/install-nexus-remote-github-worker.ps1'
+      - 'package.json'
+      - '.github/workflows/github-remote-transport-v1-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - run: npm install
+      - run: npm run check
+      - run: npm run verify:remote-github
+
+  windows-parse-and-regression:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - run: npm install
+      - name: Parse-check Windows launch/install scripts
+        shell: powershell
+        run: |
+          $errors = @()
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'scripts/run-nexus-remote-github-worker.ps1'), [ref]$null, [ref]$errors)
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'scripts/install-nexus-remote-github-worker.ps1'), [ref]$null, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | Format-List | Out-String | Write-Error; exit 1 }
+      - name: Exercise persistent Scheduled Task settings on Windows
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $settings = New-ScheduledTaskSettingsSet `
+            -StartWhenAvailable `
+            -MultipleInstances IgnoreNew `
+            -ExecutionTimeLimit (New-TimeSpan -Seconds 0) `
+            -RestartCount 3 `
+            -RestartInterval (New-TimeSpan -Minutes 1) `
+            -AllowStartIfOnBatteries `
+            -DontStopIfGoingOnBatteries
+          if ($null -eq $settings) { throw 'Failed to construct persistent Scheduled Task settings.' }
+      - name: Assert reloadable supervisor and bounded self-sync contract
+        shell: powershell
+        run: |
+          $launcher = Get-Content -LiteralPath 'scripts/run-nexus-remote-github-worker.ps1' -Raw
+          if ($launcher -match 'remote:github:worker') { throw 'Persistent launcher must not run the long-lived Node worker.' }
+          if ($launcher -notmatch 'remote:github:once') { throw 'Persistent launcher must launch a fresh one-shot worker per poll.' }
+          if (-not $launcher.Contains('Remove-Item Env:NEXUS_REMOTE_GITHUB_TOKEN')) { throw 'Launcher must clear the plaintext token after each one-shot poll.' }
+          if (-not $launcher.Contains('while ($true)')) { throw 'Persistent launcher must supervise repeated one-shot polls.' }
+
+          $installer = Get-Content -LiteralPath 'scripts/install-nexus-remote-github-worker.ps1' -Raw
+          if (-not $installer.Contains('-ExecutionTimeLimit (New-TimeSpan -Seconds 0)')) { throw 'Remote task must not expire after one day.' }
+          if (-not $installer.Contains('-RestartCount 3')) { throw 'Remote task must have bounded restart-on-failure.' }
+          if (-not $installer.Contains('-RestartInterval (New-TimeSpan -Minutes 1)')) { throw 'Remote task restart interval must stay bounded.' }
+
+          $broker = Get-Content -LiteralPath 'scripts/powershell-broker-v1.ps1' -Raw
+          foreach ($blocked in @(
+            'package.json',
+            'package-lock.json',
+            'npm-shrinkwrap.json',
+            '.npmrc',
+            'scripts/run-nexus-remote-github-worker.ps1',
+            'scripts/install-nexus-remote-github-worker.ps1'
+          )) {
+            if (-not $broker.Contains("'$blocked'")) { throw "Self-sync bootstrap guard is missing $blocked" }
+          }
+      - name: Verify current-user DPAPI SecureString roundtrip
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $temp = Join-Path $env:TEMP ("nexus-remote-dpapi-" + [guid]::NewGuid().ToString('N') + '.clixml')
+          $bstr = [IntPtr]::Zero
+          try {
+            $secure = ConvertTo-SecureString 'nexus-ci-dummy-token' -AsPlainText -Force
+            $secure | Export-Clixml -LiteralPath $temp
+            $roundTrip = Import-Clixml -LiteralPath $temp
+            if ($roundTrip -isnot [Security.SecureString]) { throw 'DPAPI Clixml did not return a SecureString.' }
+            $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($roundTrip)
+            $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+            if ($plain -ne 'nexus-ci-dummy-token') { throw 'DPAPI SecureString roundtrip did not preserve the protected value.' }
+          }
+          finally {
+            if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+            Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+          }
+      - name: Reject config that redirects launcher to another repository root
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tempRoot = Join-Path $env:TEMP ("nexus-remote-config-" + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+          $tokenFile = Join-Path $tempRoot 'token.clixml'
+          $configFile = Join-Path $tempRoot 'config.json'
+          $stdoutFile = Join-Path $tempRoot 'stdout.log'
+          $stderrFile = Join-Path $tempRoot 'stderr.log'
+          try {
+            (ConvertTo-SecureString 'nexus-ci-dummy-token' -AsPlainText -Force) | Export-Clixml -LiteralPath $tokenFile
+            @{
+              repository = 'clumsyco83-eng/nexus-content-studio'
+              owner = 'clumsyco83-eng'
+              hostId = 'ci-host'
+              repositoryRoot = $tempRoot
+              tokenFile = $tokenFile
+              label = 'nexus-remote-command'
+              pollMs = 60000
+            } | ConvertTo-Json | Set-Content -LiteralPath $configFile -Encoding UTF8
+
+            $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $launcher = (Resolve-Path 'scripts/run-nexus-remote-github-worker.ps1').Path
+            $process = Start-Process -FilePath $powershell -ArgumentList @(
+              '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned',
+              '-File', $launcher, '-ConfigPath', $configFile, '-Once'
+            ) -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile -Wait -PassThru
+            $output = @()
+            if (Test-Path -LiteralPath $stdoutFile) { $output += Get-Content -LiteralPath $stdoutFile }
+            if (Test-Path -LiteralPath $stderrFile) { $output += Get-Content -LiteralPath $stderrFile }
+            if ($process.ExitCode -eq 0) { throw 'Tampered repositoryRoot was accepted.' }
+            if (($output -join "`n") -notmatch 'does not match the repository containing the fixed remote-worker launcher') {
+              throw "Launcher failed for an unexpected reason: $($output -join ' ')"
+            }
+          }
+          finally {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+          }
+      - run: npm run verify:remote-github

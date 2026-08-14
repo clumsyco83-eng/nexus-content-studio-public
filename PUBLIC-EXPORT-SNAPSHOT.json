@@ -1,0 +1,4 @@
+{
+  "exportPolicy": "tracked-code-ci-only; fresh-public-history; private-project-brand-roadmap-strategy-runtime-state-excluded",
+  "privacyReview": "required-before-merge"
+}

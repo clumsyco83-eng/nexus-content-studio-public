@@ -1,0 +1,43 @@
+name: PowerShell Broker v1 CI
+
+on:
+  pull_request:
+    paths:
+      - 'src/powershell-broker/**'
+      - 'src/testing/powershell-broker.ts'
+      - 'src/testing/powershell-broker-v2.ts'
+      - 'scripts/powershell-broker-v1.ps1'
+      - 'package.json'
+      - '.github/workflows/powershell-broker-v1-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - run: npm install
+      - run: npm run check
+      - run: npm run verify:powershell-broker
+
+  windows-fixed-script:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - run: npm install
+      - name: Exercise fixed read-only process capability directly
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File scripts/powershell-broker-v1.ps1 -Capability system.process.inspect -ProcessName nexus-process-that-does-not-exist
+          if ($LASTEXITCODE -ne 0) { throw "PowerShell Broker fixed-script regression failed with exit code $LASTEXITCODE" }
+      - name: Exercise Node to broker to system PowerShell integration
+        run: npm run verify:powershell-broker

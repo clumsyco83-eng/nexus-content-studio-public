@@ -1,0 +1,46 @@
+{
+  "routingMode": "balanced",
+  "monthlyBudgetUsd": 50,
+  "maxRetriesPerScene": 2,
+  "allowPaidGeneration": false,
+  "providers": {
+    "higgsfield": {
+      "enabled": false,
+      "connection": "mcp_or_cli",
+      "models": ["auto", "kling-3", "seedance-2", "veo-3.1", "wan"]
+    },
+    "runway": {
+      "enabled": false,
+      "connection": "direct_api",
+      "models": ["gen4.5", "veo3.1", "veo3.1_fast", "seedance2", "seedance2_fast", "seedance2_mini", "gemini_omni_flash"]
+    },
+    "klingDirect": {
+      "enabled": false,
+      "connection": "future_direct_adapter",
+      "models": ["kling-3"]
+    },
+    "googleVeo": {
+      "enabled": false,
+      "connection": "future_direct_adapter",
+      "models": ["veo-3.1"]
+    },
+    "replicate": {
+      "enabled": false,
+      "connection": "future_gateway_adapter",
+      "models": ["kling", "seedance", "veo", "minimax"]
+    },
+    "luma": {
+      "enabled": false,
+      "connection": "future_direct_adapter",
+      "models": ["ray"]
+    }
+  },
+  "rules": {
+    "preferAnimatedStillForEditorialExplanation": true,
+    "reservePremiumModelsForHighImportanceScenes": true,
+    "neverExceedSceneBudget": true,
+    "requireApprovalBeforePaidHeroMode": true,
+    "fallbackWhenProviderUnavailable": true,
+    "recordActualProviderAndModel": true
+  }
+}

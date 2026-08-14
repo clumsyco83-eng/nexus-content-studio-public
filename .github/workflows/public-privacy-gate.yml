@@ -1,0 +1,38 @@
+name: Public Privacy Gate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-privacy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  privacy-and-determinism:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Use Node 22.16
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.16.0
+          package-manager-cache: false
+      - name: Public export privacy audit
+        shell: powershell
+        run: .\scripts\audit-public-export.ps1
+      - name: Install deterministic dependencies
+        run: npm ci
+      - name: Audit high-severity dependency vulnerabilities
+        run: npm audit --audit-level=high
+      - name: TypeScript check
+        run: npm run check

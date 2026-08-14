@@ -1,0 +1,23 @@
+name: Secure Bridge Semantic Preflight
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-semantic-history:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Detect diverged bridge prerequisite history
+        shell: powershell
+        run: .\scripts\secure-bridge-semantic-preflight.ps1 -SelfTest
