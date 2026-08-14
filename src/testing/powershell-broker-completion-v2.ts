@@ -36,6 +36,49 @@ function assertCompletionV2Route(capability: PowerShellBrokerRequest['capability
   assert.equal(invocation.args.includes(capability), true);
 }
 
+function sanitizedPathWithoutNode(systemRoot: string): string {
+  return [
+    path.win32.join(systemRoot, 'System32'),
+    path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0'),
+    systemRoot,
+  ].join(';');
+}
+
+function envWithoutAmbientPath(systemRoot: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.toLowerCase() === 'path') continue;
+    env[key] = value;
+  }
+  env.PATH = sanitizedPathWithoutNode(systemRoot);
+  return env;
+}
+
+function assertBootstrapExitCode(
+  powershell: string,
+  script: string,
+  capability: 'nexus.verification.run' | 'nexus.intelligence-foundation.complete' | 'nexus.claude.live-readiness',
+  expectedExitCode: number,
+): void {
+  const result = spawnSync(powershell, [
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy', 'RemoteSigned',
+    '-File', script,
+    '-Capability', capability,
+  ], {
+    cwd: repoRoot,
+    windowsHide: true,
+    encoding: 'utf8',
+    env: envWithoutAmbientPath(process.env.SystemRoot ?? process.env.WINDIR ?? 'C:\\Windows'),
+  });
+  assert.equal(
+    result.status,
+    expectedExitCode,
+    `${capability} should return bootstrap code ${expectedExitCode}, got ${result.status}. stderr=${result.stderr} stdout=${result.stdout}`,
+  );
+}
+
 function main(): void {
   for (const capability of [
     'nexus.verification.run',
@@ -71,9 +114,13 @@ function main(): void {
       `$e=$null;$t=$null;[System.Management.Automation.Language.Parser]::ParseFile('${script.replace(/'/g, "''")}',[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|ForEach-Object{Write-Error $_.Message};exit 1}`,
     ], { cwd: repoRoot, windowsHide: true, encoding: 'utf8' });
     assert.equal(parse.status, 0, parse.stderr || parse.stdout);
+
+    assertBootstrapExitCode(powershell, script, 'nexus.verification.run', 60);
+    assertBootstrapExitCode(powershell, script, 'nexus.intelligence-foundation.complete', 70);
+    assertBootstrapExitCode(powershell, script, 'nexus.claude.live-readiness', 90);
   }
 
-  console.log('PASS staged completion broker v2: fixed YELLOW verification/intelligence/live-Claude routes, zero arbitrary args, original broker retained for ordinary capabilities, strict remote schema, and Windows PowerShell parser gate.');
+  console.log('PASS staged completion broker v2: fixed YELLOW verification/intelligence/live-Claude routes, zero arbitrary args, trusted executable bootstrap, stage-specific exit codes, original broker retained for ordinary capabilities, strict remote schema, and Windows PowerShell parser/exit-code gates.');
 }
 
 main();
