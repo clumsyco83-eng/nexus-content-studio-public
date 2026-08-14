@@ -1,0 +1,23 @@
+name: Secure Bridge Helper Windows Regression
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell-51-native-git:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Exercise native git stderr handling under Windows PowerShell 5.1
+        shell: powershell
+        run: .\scripts\reconcile-secure-bridge-v13.ps1 -SelfTest

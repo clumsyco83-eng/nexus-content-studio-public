@@ -1,0 +1,217 @@
+name: NEXUS Integration CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches:
+      - main
+      - integration/durable-guardian-watchdog
+      - 'upgrade/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-verification:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      NEXUS_STORAGE_DRIVER: json
+      NEXUS_JSON_DATABASE_FILE: data/ci-nexus-db.json
+      NEXUS_SQLITE_DATABASE_FILE: data/ci-nexus.db
+      NEXUS_DATABASE_FILE: data/ci-nexus-db.json
+      NEXUS_ALLOW_PAID_GENERATION: 'false'
+      NEXUS_MONTH_TO_DATE_MEDIA_SPEND_USD: '0'
+      NEXUS_CLAUDE_DEFAULT_MODEL: sonnet
+      NEXUS_CLAUDE_ESCALATION_MODEL: opus
+      NEXUS_CLAUDE_MAX_TURNS: '40'
+      NEXUS_CLAUDE_REPAIR_ATTEMPTS_BEFORE_ESCALATION: '2'
+      NEXUS_CLAUDE_MAX_REPAIR_ATTEMPTS: '5'
+      NEXUS_CLAUDE_MAX_ESCALATIONS: '1'
+      HIGGSFIELD_ENABLED: 'false'
+      NEXUS_DASHBOARD_HOST: 127.0.0.1
+      NEXUS_DASHBOARD_PORT: 8787
+      NEXUS_DASHBOARD_TOKEN: ci-local-token
+      NEXUS_GUARDIAN_HEALTH_URL: http://127.0.0.1:8787/api/health
+      NEXUS_GUARDIAN_REPORT_DIR: data/ci-guardian
+      NEXUS_WATCHDOG_AUTO_RESTART: 'false'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Use Node 22.16
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.16.0
+          package-manager-cache: false
+      - name: Install dependencies
+        run: npm ci
+      - name: Audit high-severity dependency vulnerabilities
+        run: npm audit --audit-level=high
+      - name: TypeScript check
+        run: npm run check
+      - name: Verify Curious Grit Commerce Agent
+        run: npm run verify:commerce
+      - name: Verify operational controls
+        run: npm run verify:controls
+      - name: Verify Claude model routing and turn budget
+        run: npm run verify:model-routing
+      - name: Verify production model promotion evidence rules
+        run: npm run verify:model-promotion
+      - name: Verify Claude runtime identity and usage evidence
+        run: npm run verify:claude-runtime-evidence
+      - name: Verify runtime attestation and automatic capability degradation
+        run: npm run verify:runtime-attestation
+      - name: Verify per-task Claude tool, MCP and Skill envelope
+        run: npm run verify:claude-tool-envelope
+      - name: Verify READY capability-backed Claude skill admission
+        run: npm run verify:claude-skill-admission
+      - name: Verify bounded Secure Bridge Claude executor
+        run: npm run verify:secure-claude-executor
+      - name: Verify core specialist candidate capability registration
+        run: npm run verify:core-specialist-candidates
+      - name: Self-test runtime readiness auditor
+        shell: powershell
+        run: .\scripts\audit-runtime-readiness.ps1 -SelfTest
+      - name: Self-test Million-Dollar priority completion preflight
+        shell: powershell
+        run: .\scripts\priority-completion-preflight.ps1 -SelfTest
+      - name: Verify Secure Bridge helper Windows PowerShell 5.1 compatibility
+        shell: powershell
+        run: |
+          $path = (Resolve-Path '.\scripts\reconcile-secure-bridge-v13.ps1').Path
+          $bytes = [System.IO.File]::ReadAllBytes($path)
+          $nonAsciiCount = @($bytes | Where-Object { $_ -gt 127 }).Count
+          if ($nonAsciiCount -ne 0) {
+            throw "reconcile-secure-bridge-v13.ps1 must remain ASCII-safe for Windows PowerShell 5.1; found $nonAsciiCount non-ASCII byte(s)."
+          }
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            throw ("Windows PowerShell parser rejected reconcile-secure-bridge-v13.ps1: " + (($errors | ForEach-Object { $_.Message }) -join '; '))
+          }
+          Write-Host 'PASS reconcile-secure-bridge-v13.ps1 Windows PowerShell 5.1 compatibility.'
+      - name: Self-test bounded Claude live smoke policy
+        shell: powershell
+        run: .\scripts\smoke-claude-live.ps1 -SelfTest
+      - name: Parse-check full Windows laptop verifier
+        shell: powershell
+        run: |
+          $raw = Get-Content .\scripts\windows-laptop-verify.ps1 -Raw
+          [void][scriptblock]::Create($raw)
+          Write-Host 'PASS windows-laptop-verify.ps1 PowerShell parse check.'
+      - name: Parse-check core specialist completion helper
+        shell: powershell
+        run: |
+          $raw = Get-Content .\scripts\complete-core-specialist-promotion.ps1 -Raw
+          [void][scriptblock]::Create($raw)
+          Write-Host 'PASS complete-core-specialist-promotion.ps1 PowerShell parse check.'
+      - name: Self-test Claude Skill authoring quality gate
+        shell: pwsh
+        run: .\scripts\verify-claude-skill-authoring.ps1 -SelfTest
+      - name: Self-test Claude Skill authority boundary gate
+        shell: pwsh
+        run: .\scripts\verify-claude-skill-authority.ps1 -SelfTest
+      - name: Self-test core specialist candidate quality gate
+        shell: powershell
+        run: .\scripts\verify-core-specialist-candidates.ps1 -SelfTest
+      - name: Self-test preview-first core specialist file promotion
+        shell: powershell
+        run: .\scripts\promote-core-specialists.ps1 -SelfTest
+      - name: Verify Claude project runtime safety policy
+        shell: pwsh
+        run: .\scripts\verify-claude-runtime-policy.ps1
+      - name: Verify Intelligence Foundation routing
+        run: npm run verify:intelligence-routing
+      - name: Verify capability-gated scheduling
+        run: npm run verify:capabilities
+      - name: Verify capability evidence drift invalidation
+        run: npm run verify:capability-evidence
+      - name: Verify preview-first capability evidence recorder
+        run: npm run verify:capability-recorder
+      - name: Verify persistent Goal Engine and queue contracts
+        run: npm run verify:goals
+      - name: Verify fingerprint-bound Goal task approvals
+        run: npm run verify:goal-task-approvals
+      - name: Verify NEXUS emergency stop
+        run: npm run verify:emergency-stop
+      - name: Verify deterministic Goal task Verifier
+        run: npm run verify:goal-task-verifier
+      - name: Verify stuck and dead-loop detector
+        run: npm run verify:stuck
+      - name: Verify persistent diagnostics and bounded replanning
+        run: npm run verify:replan
+      - name: Verify deterministic automatic resume
+        run: npm run verify:resume
+      - name: Verify deterministic NEXUS runtime cycle
+        run: npm run verify:runtime-cycle
+      - name: Verify semantic Secure Bridge runtime integration
+        run: npm run verify:secure-bridge-runtime
+      - name: Verify persistent goal dashboard snapshot
+        run: npm run verify:goal-dashboard
+      - name: Verify deterministic collaboration-loop acceptance
+        run: npm run verify:collaboration-e2e
+      - name: Verify OpenAI strategy adapter without network or secrets
+        run: npm run verify:openai-strategy
+      - name: Verify SQLite durable core
+        run: npm run verify:sqlite
+      - name: Verify NEXUS system in safe mode
+        run: npm run verify:system
+      - name: Start dashboard for Guardian, goal visibility and Watchdog verification
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath "node.exe" -ArgumentList "--import","tsx","src/dashboard/server.ts" -PassThru
+          $process.Id | Out-File -FilePath nexus-dashboard.pid -Encoding ascii
+          $headers = @{ Authorization = "Bearer $env:NEXUS_DASHBOARD_TOKEN" }
+          $ready = $false
+          for ($i = 0; $i -lt 40; $i++) {
+            try {
+              $response = Invoke-RestMethod -Uri $env:NEXUS_GUARDIAN_HEALTH_URL -Headers $headers -TimeoutSec 2
+              if ($response.ok) { $ready = $true; break }
+            } catch {}
+            Start-Sleep -Milliseconds 250
+          }
+          if (-not $ready) { throw "NEXUS dashboard did not become healthy for supervision verification." }
+      - name: Verify authenticated goal dashboard and approval APIs
+        shell: pwsh
+        run: |
+          $headers = @{ Authorization = "Bearer $env:NEXUS_DASHBOARD_TOKEN" }
+          $goals = Invoke-RestMethod -Uri "http://127.0.0.1:$env:NEXUS_DASHBOARD_PORT/api/goals" -Headers $headers -TimeoutSec 3
+          if ($null -eq $goals.summary) { throw "Goal dashboard API did not return summary." }
+          if ($null -eq $goals.goals) { throw "Goal dashboard API did not return goals." }
+          if ([string]::IsNullOrWhiteSpace([string]$goals.generatedAt)) { throw "Goal dashboard API did not return generatedAt." }
+          $approvals = Invoke-RestMethod -Uri "http://127.0.0.1:$env:NEXUS_DASHBOARD_PORT/api/goal-approvals" -Headers $headers -TimeoutSec 3
+          if ($null -eq $approvals.approvals) { throw "Goal approval API did not return approvals." }
+          try {
+            Invoke-RestMethod -Uri "http://127.0.0.1:$env:NEXUS_DASHBOARD_PORT/api/goal-approvals" -TimeoutSec 3 | Out-Null
+            throw "Goal approval API accepted an unauthenticated request."
+          } catch {
+            if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -ne 401) { throw }
+          }
+      - name: Verify Guardian deep health report
+        run: npm run guardian:check
+      - name: Verify Watchdog heartbeat without recovery
+        run: npm run guardian:watchdog:once
+      - name: Assert supervision reports
+        shell: pwsh
+        run: |
+          $guardian = Get-Content "$env:NEXUS_GUARDIAN_REPORT_DIR/latest.json" -Raw | ConvertFrom-Json
+          if ($guardian.status -ne "GREEN") { throw "Guardian status was $($guardian.status), expected GREEN." }
+          $watchdog = Get-Content "$env:NEXUS_GUARDIAN_REPORT_DIR/watchdog.json" -Raw | ConvertFrom-Json
+          if (-not $watchdog.ok) { throw "Watchdog heartbeat reported unhealthy." }
+          if ($watchdog.action -ne "none") { throw "Watchdog attempted an unexpected action: $($watchdog.action)" }
+      - name: Stop supervision dashboard
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path nexus-dashboard.pid) {
+            $dashboardPid = [int](Get-Content nexus-dashboard.pid -Raw)
+            Stop-Process -Id $dashboardPid -Force -ErrorAction SilentlyContinue
+          }

@@ -1,0 +1,36 @@
+node_modules/
+dist/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+.npmrc
+.netrc
+.git-credentials
+.claude/settings.local.json
+secrets/
+credentials.json
+service-account*.json
+
+# Private keys and certificate bundles
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+
+# NEXUS runtime state and generated artifacts
+data/
+output/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local logs and OS metadata
+*.log
+.DS_Store
+Thumbs.db

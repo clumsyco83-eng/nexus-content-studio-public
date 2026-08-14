@@ -1,0 +1,3 @@
+# Public export inventory intentionally redacted.
+# Exact private source-path inventory is maintained only in the private control-plane repository.
+# This file is replaced by the private fail-closed exporter on a future approved synchronization run.
