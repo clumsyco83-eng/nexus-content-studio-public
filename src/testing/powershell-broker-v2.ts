@@ -22,9 +22,9 @@ class MockRunner implements PowerShellBrokerRunner {
 function goal(now: string): StoredGoal {
   return {
     id: 'goal-maintenance-v2',
-    title: 'Maintenance broker v2 regression',
-    objective: 'Verify maintenance authority stays capability-scoped and fail-closed.',
-    successCriteria: ['Only fixed maintenance actions execute.'],
+    title: 'Maintenance broker v2/v3 regression',
+    objective: 'Verify maintenance and roadmap authority stay capability-scoped and fail-closed.',
+    successCriteria: ['Only fixed maintenance and roadmap actions execute.'],
     priority: 100,
     budget: {},
     state: 'WORKING',
@@ -71,7 +71,7 @@ function approvalFor(input: { id: string; task: StoredGoalTask; now: Date }): St
     riskClass: 'YELLOW',
     status: 'APPROVED',
     requestedBy: 'test',
-    reason: 'Maintenance v2 regression approval.',
+    reason: 'Maintenance/roadmap regression approval.',
     createdAt: input.now.toISOString(),
     expiresAt: new Date(input.now.getTime() + 60 * 60_000).toISOString(),
     resolvedAt: input.now.toISOString(),
@@ -113,14 +113,22 @@ async function main(): Promise<void> {
     const serviceStatusTask = task({ id: 'service-status', risk: 'GREEN', approval: 'NONE', capability: 'nexus.service.status', now: now.toISOString() });
     const repoStatusTask = task({ id: 'repo-status', risk: 'GREEN', approval: 'NONE', capability: 'nexus.repo.status', now: now.toISOString() });
     const serviceStartTask = task({ id: 'service-start', risk: 'YELLOW', approval: 'OWNER', capability: 'nexus.service.start', now: now.toISOString() });
+    const serviceRestartTask = task({ id: 'service-restart', risk: 'YELLOW', approval: 'OWNER', capability: 'nexus.service.restart', now: now.toISOString() });
     const repoSyncTask = task({ id: 'repo-sync', risk: 'YELLOW', approval: 'OWNER', capability: 'nexus.repo.sync', now: now.toISOString() });
+    const intelligenceTask = task({ id: 'intelligence-complete', risk: 'YELLOW', approval: 'OWNER', capability: 'nexus.intelligence-foundation.complete', now: now.toISOString() });
+    const coreTask = task({ id: 'core-complete', risk: 'YELLOW', approval: 'OWNER', capability: 'nexus.core-specialists.complete', now: now.toISOString() });
+    const businessTask = task({ id: 'business-complete', risk: 'YELLOW', approval: 'OWNER', capability: 'nexus.business-profile.complete', now: now.toISOString() });
 
     const db = emptyDatabase();
     db.goals.push(goal(now.toISOString()));
-    db.goalTasks.push(serviceStatusTask, repoStatusTask, serviceStartTask, repoSyncTask);
+    db.goalTasks.push(serviceStatusTask, repoStatusTask, serviceStartTask, serviceRestartTask, repoSyncTask, intelligenceTask, coreTask, businessTask);
     db.goalTaskApprovals.push(
       approvalFor({ id: 'approval-service-start', task: serviceStartTask, now }),
+      approvalFor({ id: 'approval-service-restart', task: serviceRestartTask, now }),
       approvalFor({ id: 'approval-repo-sync', task: repoSyncTask, now }),
+      approvalFor({ id: 'approval-intelligence', task: intelligenceTask, now }),
+      approvalFor({ id: 'approval-core', task: coreTask, now }),
+      approvalFor({ id: 'approval-business', task: businessTask, now }),
     );
     await store.save(db);
 
@@ -172,17 +180,39 @@ async function main(): Promise<void> {
     await broker.execute(serviceStart, serviceStartLease.id, new Date(now.getTime() + 2_500));
     assert.equal(runner.invocations[3]?.args.includes('nexus.service.start'), true);
 
+    const roadmapCases: Array<{ capability: PowerShellBrokerRequest['capability']; task: StoredGoalTask; id: string }> = [
+      { capability: 'nexus.service.restart', task: serviceRestartTask, id: 'req-service-restart' },
+      { capability: 'nexus.intelligence-foundation.complete', task: intelligenceTask, id: 'req-intelligence' },
+      { capability: 'nexus.core-specialists.complete', task: coreTask, id: 'req-core' },
+      { capability: 'nexus.business-profile.complete', task: businessTask, id: 'req-business' },
+    ];
+
+    for (const item of roadmapCases) {
+      const exact = request({ id: item.id, taskId: item.task.id, capability: item.capability, args: {}, cwd: repoRoot, now });
+      const lease = await broker.issueLease(exact, now);
+      await broker.execute(exact, lease.id, new Date(now.getTime() + 3_000 + runner.invocations.length));
+      const invocation = runner.invocations.at(-1);
+      assert.equal(invocation?.args.includes(item.capability), true);
+      assert.equal(invocation?.args.includes('-Command'), false, `${item.capability} must never use arbitrary -Command.`);
+      assert.equal(invocation?.args.filter((arg) => arg === '-Capability').length, 1);
+
+      const injected = request({ id: `${item.id}-injected`, taskId: item.task.id, capability: item.capability, args: { script: 'whoami' }, cwd: repoRoot, now });
+      await assert.rejects(() => broker.issueLease(injected, now), /Expected exactly: \(none\)/);
+    }
+
     const dbNoApprovals = await store.load();
     dbNoApprovals.goalTaskApprovals = [];
     await store.save(dbNoApprovals);
-    await assert.rejects(
-      () => broker.issueLease({ ...repoSync, id: 'req-repo-sync-no-approval' }, now),
-      /Owner approval required/,
-    );
-    await assert.rejects(
-      () => broker.issueLease({ ...serviceStart, id: 'req-service-start-no-approval' }, now),
-      /Owner approval required/,
-    );
+    for (const item of [
+      { request: repoSync, label: 'repo sync' },
+      { request: serviceStart, label: 'service start' },
+      ...roadmapCases.map((item) => ({
+        request: request({ id: `${item.id}-no-approval`, taskId: item.task.id, capability: item.capability, args: {}, cwd: repoRoot, now }),
+        label: item.capability,
+      })),
+    ]) {
+      await assert.rejects(() => broker.issueLease(item.request, now), /Owner approval required/, `${item.label} must remain owner-gated.`);
+    }
 
     if (process.platform === 'win32') {
       const realRepoRoot = path.resolve(process.cwd());
@@ -208,7 +238,7 @@ async function main(): Promise<void> {
       assert.equal(typeof payload.service?.exists, 'boolean');
     }
 
-    console.log('PASS PowerShell Broker v2 maintenance: fixed service/repository actions, exact args, full-SHA binding, owner approval for state changes, no arbitrary shell, and Windows real-process service-status smoke.');
+    console.log('PASS PowerShell Broker v3 roadmap expansion: fixed service/repository actions plus four zero-argument owner-gated roadmap capabilities, exact args, full-SHA binding, no arbitrary shell, and Windows real-process service-status smoke.');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
