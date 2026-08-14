@@ -27,14 +27,20 @@ function main(): void {
   assert.equal(path.win32.basename(trustedGit).toLowerCase(), 'git.exe');
 
   const env = buildPowerShellBrokerEnvironment(poisoned);
-  assert.equal(env.PATH?.toLowerCase().includes('attacker-controlled-bin'), false);
-  assert.equal(env.PATH?.toLowerCase().includes(path.win32.dirname(trustedGit).toLowerCase()), true);
+  assert.equal(env.PATH?.toLowerCase().includes('attacker-controlled-bin'), false, 'Ambient PATH must remain excluded.');
+  assert.equal(env.PATH?.toLowerCase().includes(path.win32.dirname(trustedGit).toLowerCase()), true, 'Only the trusted Git directory should be admitted.');
   assert.equal(env.OPENAI_API_KEY, undefined);
   assert.equal(env.GH_TOKEN, undefined);
   assert.equal(env.NEXUS_DASHBOARD_TOKEN, undefined);
 
-  const version = execFileSync('git.exe', ['--version'], { env, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const version = execFileSync('git.exe', ['--version'], {
+    env,
+    encoding: 'utf8',
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
   assert.match(version, /^git version\s+/i);
+
   console.log('PASS PowerShell Broker trusted-Git regression: fixed Program Files Git resolves inside the sanitized environment while ambient PATH and secrets remain excluded.');
 }
 
