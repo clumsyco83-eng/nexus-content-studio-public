@@ -1,0 +1,20 @@
+name: Public Actions Smoke
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - name: Confirm free public Windows runner
+        shell: powershell
+        run: |
+          Write-Host "PUBLIC ACTIONS SMOKE: PASS"
+          Write-Host "Repository: $env:GITHUB_REPOSITORY"
+          Write-Host "SHA: $env:GITHUB_SHA"
