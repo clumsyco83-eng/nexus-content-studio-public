@@ -74,6 +74,9 @@ export function buildPowerShellBrokerEnvironment(source: NodeJS.ProcessEnv = pro
   env.PATHEXT = '.COM;.EXE;.BAT;.CMD';
   env.PATH = [...new Set(trustedPathEntries.filter((entry): entry is string => Boolean(entry)))].join(path.delimiter);
 
+  // Fixed verification capabilities invoke only repository-owned npm scripts.
+  // Do not let ambient user/global npm configuration redirect their script shell,
+  // inject a custom config, or add unrelated network/update behavior.
   env.NPM_CONFIG_SCRIPT_SHELL = commandShell;
   env.NPM_CONFIG_USERCONFIG = 'NUL';
   env.NPM_CONFIG_GLOBALCONFIG = 'NUL';
@@ -102,20 +105,44 @@ function terminateProcessTree(pid: number | undefined): void {
     killer.unref();
     return;
   }
-  try { process.kill(pid, 'SIGKILL'); } catch {}
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // Process may have exited between timeout and kill; close handler remains authoritative.
+  }
 }
 
 export class NodePowerShellBrokerRunner implements PowerShellBrokerRunner {
   constructor(private readonly outputLimitBytes = 256 * 1024) {}
+
   async run(invocation: PowerShellInvocation): Promise<PowerShellRunnerResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn(invocation.file, invocation.args, { cwd: invocation.cwd, env: buildPowerShellBrokerEnvironment(), shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = ''; let stderr = ''; let timedOut = false;
-      const timer = setTimeout(() => { timedOut = true; terminateProcessTree(child.pid); }, invocation.timeoutMs);
+      const child = spawn(invocation.file, invocation.args, {
+        cwd: invocation.cwd,
+        env: buildPowerShellBrokerEnvironment(),
+        shell: false,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        terminateProcessTree(child.pid);
+      }, invocation.timeoutMs);
+
       child.stdout?.on('data', (chunk: Buffer) => { stdout = appendBounded(stdout, chunk, this.outputLimitBytes); });
       child.stderr?.on('data', (chunk: Buffer) => { stderr = appendBounded(stderr, chunk, this.outputLimitBytes); });
-      child.once('error', (error) => { clearTimeout(timer); reject(error); });
-      child.once('close', (code) => { clearTimeout(timer); resolve({ exitCode: typeof code === 'number' ? code : -1, stdout, stderr, timedOut }); });
+      child.once('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once('close', (code) => {
+        clearTimeout(timer);
+        resolve({ exitCode: typeof code === 'number' ? code : -1, stdout, stderr, timedOut });
+      });
     });
   }
 }
