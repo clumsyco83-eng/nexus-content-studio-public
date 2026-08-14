@@ -110,10 +110,20 @@ export class GoalTaskApprovalRepository {
       let released = 0;
       for (const task of db.goalTasks) {
         if (task.state !== 'WAITING' || !taskEligibleForMillionDollarBuildMode(task)) continue;
-        for (const approval of db.goalTaskApprovals) {
-          if (approval.goalId === task.goalId && approval.taskId === task.id && approval.status === 'PENDING') {
-            invalidate(approval, 'Superseded by active owner-authorized Million-Dollar Build Mode standing authority.', now);
-          }
+        const executionAttempt = nextGoalTaskExecutionAttempt(task);
+        const taskFingerprint = fingerprintGoalTask(task, executionAttempt);
+        const currentPending = db.goalTaskApprovals.filter((approval) =>
+          approval.goalId === task.goalId &&
+          approval.taskId === task.id &&
+          approval.status === 'PENDING' &&
+          approval.executionAttempt === executionAttempt &&
+          approval.taskFingerprint === taskFingerprint &&
+          validExpiry(approval, now),
+        );
+        if (currentPending.length < 1) continue;
+
+        for (const approval of currentPending) {
+          invalidate(approval, 'Superseded by active owner-authorized Million-Dollar Build Mode standing authority.', now);
         }
         task.state = 'READY';
         task.updatedAt = now.toISOString();
