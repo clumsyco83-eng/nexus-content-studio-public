@@ -160,6 +160,78 @@ async function main() {
     assert.equal(expired.approved, false);
     assert.equal((await approvals.get(expiringApproval.id))?.status, 'EXPIRED');
 
+    const buildModeTask = await goals.enqueueTask({
+      id: 'build-mode-task',
+      goalId: 'goal-approval',
+      title: 'Bounded autonomous Claude edit',
+      intent: 'Verify Build Mode can replace repeated approvals only for a tightly bounded Claude task.',
+      worker: 'CLAUDE',
+      acceptanceCriteria: ['required-file:src/features/build-mode-output.txt'],
+      verificationPlan: ['required-file:src/features/build-mode-output.txt'],
+      requiredCapabilities: [],
+      allowedPaths: ['src/features/build-mode-output.txt'],
+      forbiddenPaths: ['src/safety/**', 'src/guardian/**', '.claude/**', '.env'],
+      riskClass: 'YELLOW',
+      approvalRequirement: 'OWNER',
+      idempotencyKey: 'goal-approval:build-mode:v1',
+      maxTurns: 4,
+      maxRepairs: 2,
+      timeLimitMs: 30_000,
+      tokenBudget: 1_000,
+      costBudgetUsd: 0.25,
+    });
+    const buildPending = await approvals.requestForTask({
+      goalId: buildModeTask.goalId,
+      taskId: buildModeTask.id,
+      requestedBy: 'nexus',
+      reason: 'Pending before Build Mode activation.',
+      ttlMs: 60_000,
+      now: new Date('2026-08-13T11:00:00.000Z'),
+    });
+    assert.equal((await store.load()).goalTasks.find((item) => item.id === buildModeTask.id)?.state, 'WAITING');
+
+    const buildActivation = await approvals.activateMillionDollarBuildMode('owner-dashboard', new Date('2026-08-13T11:00:10.000Z'));
+    assert.equal(buildActivation.status.effectiveActive, true);
+    assert.equal(buildActivation.releasedTasks, 1);
+    assert.equal((await approvals.get(buildPending.id))?.status, 'INVALIDATED');
+    assert.equal((await store.load()).goalTasks.find((item) => item.id === buildModeTask.id)?.state, 'READY');
+
+    const buildAuthorized = await approvals.validateForTask(buildModeTask.goalId, buildModeTask.id, new Date('2026-08-13T11:00:20.000Z'));
+    assert.equal(buildAuthorized.approved, true);
+    assert.equal(buildAuthorized.authorizationSource, 'MILLION_DOLLAR_BUILD_MODE');
+    assert.match(buildAuthorized.authorizationFingerprint ?? '', /^[a-f0-9]{64}$/);
+    await assert.rejects(() => approvals.requestForTask({
+      goalId: buildModeTask.goalId,
+      taskId: buildModeTask.id,
+      requestedBy: 'nexus',
+      reason: 'Standing authority must prevent redundant approval creation.',
+      ttlMs: 60_000,
+      now: new Date('2026-08-13T11:00:25.000Z'),
+    }), /standing authority/i);
+
+    const protectedBuildModeTask = await goals.enqueueTask({
+      id: 'protected-build-mode-task',
+      goalId: 'goal-approval',
+      title: 'Protected approval-authority edit',
+      intent: 'Must not inherit standing Build Mode authority.',
+      worker: 'CLAUDE',
+      acceptanceCriteria: ['required-file:src/goals/task-approvals.ts'],
+      verificationPlan: ['required-file:src/goals/task-approvals.ts'],
+      requiredCapabilities: [],
+      allowedPaths: ['src/goals/task-approvals.ts'],
+      forbiddenPaths: [],
+      riskClass: 'YELLOW',
+      approvalRequirement: 'OWNER',
+      idempotencyKey: 'goal-approval:protected-build-mode:v1',
+      maxTurns: 4,
+      maxRepairs: 2,
+      timeLimitMs: 30_000,
+      tokenBudget: 1_000,
+      costBudgetUsd: 0.25,
+    });
+    const protectedStatus = await approvals.validateForTask(protectedBuildModeTask.goalId, protectedBuildModeTask.id, new Date('2026-08-13T11:00:30.000Z'));
+    assert.equal(protectedStatus.approved, false, 'Approval/control-plane paths must still require exact per-task owner approval.');
+
     const red = await goals.enqueueTask({
       id: 'red-task',
       goalId: 'goal-approval',
@@ -168,10 +240,16 @@ async function main() {
       worker: 'CLAUDE',
       acceptanceCriteria: ['required-file:src/generated/red.txt'],
       verificationPlan: ['required-file:src/generated/red.txt'],
+      allowedPaths: ['src/generated/red.txt'],
       riskClass: 'RED',
       approvalRequirement: 'OWNER',
       idempotencyKey: 'goal-approval:red:v1',
+      maxTurns: 4,
+      maxRepairs: 2,
+      timeLimitMs: 30_000,
+      costBudgetUsd: 0.25,
     });
+    assert.equal((await approvals.validateForTask(red.goalId, red.id, new Date('2026-08-13T11:00:40.000Z'))).approved, false, 'Build Mode must never authorize RED.');
     await assert.rejects(() => approvals.requestForTask({
       goalId: red.goalId,
       taskId: red.id,
@@ -179,6 +257,14 @@ async function main() {
       reason: 'Should be refused.',
       ttlMs: 60_000,
     }), /RED.*non-executable/i);
+
+    const buildExpired = await approvals.getMillionDollarBuildModeStatus(new Date('2026-08-14T11:00:11.000Z'));
+    assert.equal(buildExpired.effectiveActive, false, 'Build Mode must fail closed after its fixed 24-hour TTL.');
+    assert.equal(buildExpired.expired, true);
+
+    const deactivated = await approvals.deactivateMillionDollarBuildMode('owner-dashboard', new Date('2026-08-13T11:01:00.000Z'));
+    assert.equal(deactivated.effectiveActive, false);
+    assert.equal((await approvals.validateForTask(buildModeTask.goalId, buildModeTask.id, new Date('2026-08-13T11:01:10.000Z'))).approved, false, 'Deactivation must immediately restore the per-task gate.');
 
     const green = await goals.enqueueTask({
       id: 'green-task',
@@ -224,9 +310,9 @@ async function main() {
     assert.equal((await store.load()).goalTasks.find((item) => item.id === denied.id)?.state, 'CANCELLED');
 
     const reloaded = new JsonFileStore(file);
-    assert.ok((await reloaded.load()).goalTaskApprovals.length >= 5, 'Goal task approvals must survive store reload.');
+    assert.ok((await reloaded.load()).goalTaskApprovals.length >= 6, 'Goal task approvals must survive store reload.');
 
-    console.log('PASS NEXUS Goal-task approvals: SHA-256 contract/attempt binding, YELLOW owner gate, RED non-executable, TTL expiry, changed-contract invalidation, fresh retry approval, denial cancellation and durable persistence.');
+    console.log('PASS NEXUS Goal-task approvals: exact contract binding, RED non-executable, TTL/denial handling, and temporary Million-Dollar Build Mode standing authority limited to fixed maintenance and bounded non-authority Claude edits.');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
