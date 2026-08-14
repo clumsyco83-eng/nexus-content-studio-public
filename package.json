@@ -37,7 +37,7 @@
     "verify:goals": "tsx src/testing/goal-engine.ts",
     "verify:goal-task-approvals": "tsx src/testing/goal-task-approvals.ts",
     "verify:emergency-stop": "tsx src/testing/emergency-stop.ts",
-    "verify:powershell-broker": "tsx src/testing/powershell-broker.ts && tsx src/testing/powershell-broker-v2.ts",
+    "verify:powershell-broker": "tsx src/testing/powershell-broker.ts && tsx src/testing/powershell-broker-v2.ts && tsx src/testing/powershell-broker-trusted-git.ts",
     "verify:remote-github": "tsx src/testing/github-remote-transport.ts && tsx src/testing/github-remote-maintenance.ts",
     "remote:github:once": "tsx src/remote-transport/worker.ts --once",
     "remote:github:worker": "tsx src/remote-transport/worker.ts",
