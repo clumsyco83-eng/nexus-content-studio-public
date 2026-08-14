@@ -15,6 +15,9 @@ const REMOTE_YELLOW_ALLOWLIST = new Set([
   'nexus.business-profile.complete',
 ]);
 
+// Standing Claude authority deliberately excludes every surface that can widen
+// execution, approval, model/capability routing, persistence, transport,
+// publishing/provider effects, dependency/CI authority, or safety verification.
 const CLAUDE_PROTECTED_EXACT = new Set([
   'package.json',
   'package-lock.json',
@@ -25,18 +28,32 @@ const CLAUDE_PROTECTED_EXACT = new Set([
   'operating_controls.md',
   '.env',
   '.env.example',
+  'src/approval.ts',
+  'src/index.ts',
+  'src/memory.ts',
 ]);
 
 const CLAUDE_PROTECTED_PREFIXES = [
   '.claude/',
   '.github/',
+  'dashboard/',
   'scripts/',
-  'src/safety/',
-  'src/guardian/',
-  'src/powershell-broker/',
-  'src/remote-transport/',
-  'src/orchestration/',
+  'src/ai/',
+  'src/capabilities/',
   'src/claude/',
+  'src/dashboard/',
+  'src/goals/',
+  'src/guardian/',
+  'src/openai/',
+  'src/orchestration/',
+  'src/powershell-broker/',
+  'src/providers/',
+  'src/publishing/',
+  'src/remote-transport/',
+  'src/safety/',
+  'src/scheduling/',
+  'src/storage/',
+  'src/testing/',
   'src/verification/',
 ];
 
@@ -201,16 +218,18 @@ export class MillionDollarBuildModeStore {
     const actor = deactivatedBy.trim();
     if (!actor) throw new Error('deactivatedBy is required to deactivate Million-Dollar Build Mode.');
     if (!Number.isFinite(now.getTime())) throw new Error('Build Mode deactivation time must be valid.');
-    const current = await this.readState();
-    const state: MillionDollarBuildModeState = {
-      ...current,
-      schema: MILLION_DOLLAR_BUILD_MODE_SCHEMA,
-      active: false,
-      deactivatedAt: now.toISOString(),
-      deactivatedBy: actor,
-      reason: 'Normal per-task owner approvals restored.',
-    };
-    await this.enqueue(async () => this.saveUnlocked(state));
+    await this.enqueue(async () => {
+      const current = await this.readState();
+      const state: MillionDollarBuildModeState = {
+        ...current,
+        schema: MILLION_DOLLAR_BUILD_MODE_SCHEMA,
+        active: false,
+        deactivatedAt: now.toISOString(),
+        deactivatedBy: actor,
+        reason: 'Normal per-task owner approvals restored.',
+      };
+      await this.saveUnlocked(state);
+    });
     return this.getStatus(now);
   }
 
