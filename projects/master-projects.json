@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "updatedAt": "public-ci-fixture",
+  "projects": [
+    {
+      "id": "public-ci-fixture",
+      "name": "Public CI Fixture",
+      "priority": 1,
+      "tasks": [
+        {
+          "id": "schema-health",
+          "title": "Verify public project-control schema and health path",
+          "status": "DONE",
+          "notes": "Synthetic non-operational fixture for public CI only.",
+          "requires": []
+        }
+      ]
+    }
+  ]
+}
