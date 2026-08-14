@@ -8,8 +8,12 @@ export type PowerShellBrokerCapabilityId =
   | 'nexus.verification.run'
   | 'nexus.service.status'
   | 'nexus.service.start'
+  | 'nexus.service.restart'
   | 'nexus.repo.status'
-  | 'nexus.repo.sync';
+  | 'nexus.repo.sync'
+  | 'nexus.intelligence-foundation.complete'
+  | 'nexus.core-specialists.complete'
+  | 'nexus.business-profile.complete';
 
 export interface PowerShellBrokerRequest {
   id: string;
@@ -62,6 +66,11 @@ const CAPABILITIES: Record<PowerShellBrokerCapabilityId, PowerShellBrokerCapabil
     riskClass: 'YELLOW',
     description: 'Start the fixed NEXUS Assistant Scheduled Task and verify the loopback health endpoint.',
   },
+  'nexus.service.restart': {
+    id: 'nexus.service.restart',
+    riskClass: 'YELLOW',
+    description: 'Restart only the fixed NEXUS Assistant Scheduled Task and require loopback health recovery.',
+  },
   'nexus.repo.status': {
     id: 'nexus.repo.status',
     riskClass: 'GREEN',
@@ -71,6 +80,21 @@ const CAPABILITIES: Record<PowerShellBrokerCapabilityId, PowerShellBrokerCapabil
     id: 'nexus.repo.sync',
     riskClass: 'YELLOW',
     description: 'Fast-forward only the clean NEXUS main worktree to one explicitly approved origin/main commit.',
+  },
+  'nexus.intelligence-foundation.complete': {
+    id: 'nexus.intelligence-foundation.complete',
+    riskClass: 'YELLOW',
+    description: 'Install and deterministically verify only the pinned NEXUS Intelligence Foundation package through repository-owned completion helpers.',
+  },
+  'nexus.core-specialists.complete': {
+    id: 'nexus.core-specialists.complete',
+    riskClass: 'YELLOW',
+    description: 'Promote and deterministically verify only the fixed six canonical NEXUS core specialist skills from the fixed local source tree.',
+  },
+  'nexus.business-profile.complete': {
+    id: 'nexus.business-profile.complete',
+    riskClass: 'YELLOW',
+    description: 'Install and deterministically verify only the pinned seven-skill NEXUS Business Intelligence Profile package.',
   },
 };
 
@@ -157,7 +181,11 @@ export function validatePowerShellBrokerRequest(request: PowerShellBrokerRequest
     capability.id === 'nexus.verification.run'
     || capability.id === 'nexus.service.status'
     || capability.id === 'nexus.service.start'
+    || capability.id === 'nexus.service.restart'
     || capability.id === 'nexus.repo.status'
+    || capability.id === 'nexus.intelligence-foundation.complete'
+    || capability.id === 'nexus.core-specialists.complete'
+    || capability.id === 'nexus.business-profile.complete'
   ) {
     assertExactKeys(request.args, []);
   } else if (capability.id === 'nexus.repo.sync') {
