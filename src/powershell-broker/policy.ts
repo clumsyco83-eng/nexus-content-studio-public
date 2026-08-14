@@ -13,7 +13,8 @@ export type PowerShellBrokerCapabilityId =
   | 'nexus.repo.sync'
   | 'nexus.intelligence-foundation.complete'
   | 'nexus.core-specialists.complete'
-  | 'nexus.business-profile.complete';
+  | 'nexus.business-profile.complete'
+  | 'nexus.claude.live-readiness';
 
 export interface PowerShellBrokerRequest {
   id: string;
@@ -96,6 +97,11 @@ const CAPABILITIES: Record<PowerShellBrokerCapabilityId, PowerShellBrokerCapabil
     riskClass: 'YELLOW',
     description: 'Install and deterministically verify only the pinned seven-skill NEXUS Business Intelligence Profile package.',
   },
+  'nexus.claude.live-readiness': {
+    id: 'nexus.claude.live-readiness',
+    riskClass: 'YELLOW',
+    description: 'Run one fixed one-turn no-tool Claude Code live readiness call through the NEXUS Secure Claude Executor using evaluated model/version evidence.',
+  },
 };
 
 function canonicalJson(value: unknown): string {
@@ -146,6 +152,17 @@ function systemPowerShellPath(): string {
   return path.win32.join(windowsRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 }
 
+function brokerScriptPath(repoRoot: string, capability: PowerShellBrokerCapabilityId): string {
+  if (
+    capability === 'nexus.verification.run'
+    || capability === 'nexus.intelligence-foundation.complete'
+    || capability === 'nexus.claude.live-readiness'
+  ) {
+    return path.join(repoRoot, 'scripts', 'powershell-broker-completion-v2.ps1');
+  }
+  return path.join(repoRoot, 'scripts', 'powershell-broker-v1.ps1');
+}
+
 export function getPowerShellBrokerCapability(id: PowerShellBrokerCapabilityId): PowerShellBrokerCapability {
   const capability = CAPABILITIES[id];
   if (!capability) throw new Error(`Unknown PowerShell Broker capability: ${String(id)}`);
@@ -186,6 +203,7 @@ export function validatePowerShellBrokerRequest(request: PowerShellBrokerRequest
     || capability.id === 'nexus.intelligence-foundation.complete'
     || capability.id === 'nexus.core-specialists.complete'
     || capability.id === 'nexus.business-profile.complete'
+    || capability.id === 'nexus.claude.live-readiness'
   ) {
     assertExactKeys(request.args, []);
   } else if (capability.id === 'nexus.repo.sync') {
@@ -197,7 +215,7 @@ export function validatePowerShellBrokerRequest(request: PowerShellBrokerRequest
 
 export function buildPowerShellInvocation(request: PowerShellBrokerRequest, repoRoot: string, now = new Date()): PowerShellInvocation {
   validatePowerShellBrokerRequest(request, repoRoot, now);
-  const script = path.join(repoRoot, 'scripts', 'powershell-broker-v1.ps1');
+  const script = brokerScriptPath(repoRoot, request.capability);
   const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned', '-File', script, '-Capability', request.capability];
   if (request.capability === 'system.process.inspect') args.push('-ProcessName', request.args.processName);
   if (request.capability === 'nexus.health.check') args.push('-Url', request.args.url);
