@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { lstatSync } from 'node:fs';
 import path from 'node:path';
 import type { PowerShellInvocation } from './policy.js';
 
@@ -34,6 +35,22 @@ function trustedCommandShell(source: NodeJS.ProcessEnv = process.env): string {
   return path.win32.join(windowsRoot(source), 'System32', 'cmd.exe');
 }
 
+export function resolveTrustedGitExecutable(source: NodeJS.ProcessEnv = process.env): string | undefined {
+  const candidates: string[] = [];
+  if (source.ProgramFiles) candidates.push(path.win32.join(source.ProgramFiles, 'Git', 'cmd', 'git.exe'));
+  if (source['ProgramFiles(x86)']) candidates.push(path.win32.join(source['ProgramFiles(x86)'], 'Git', 'cmd', 'git.exe'));
+
+  for (const candidate of candidates) {
+    try {
+      const stat = lstatSync(candidate);
+      if (stat.isFile() && !stat.isSymbolicLink()) return candidate;
+    } catch {
+      // Missing/unreadable candidates are ignored; no ambient PATH fallback is allowed.
+    }
+  }
+  return undefined;
+}
+
 export function buildPowerShellBrokerEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of ENV_ALLOWLIST) {
@@ -43,8 +60,10 @@ export function buildPowerShellBrokerEnvironment(source: NodeJS.ProcessEnv = pro
 
   const root = windowsRoot(source);
   const commandShell = trustedCommandShell(source);
+  const trustedGit = resolveTrustedGitExecutable(source);
   const trustedPathEntries = [
     path.dirname(process.execPath),
+    trustedGit ? path.win32.dirname(trustedGit) : undefined,
     path.win32.join(root, 'System32'),
     path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0'),
     root,
@@ -53,7 +72,7 @@ export function buildPowerShellBrokerEnvironment(source: NodeJS.ProcessEnv = pro
   env.OS = source.OS ?? (process.platform === 'win32' ? 'Windows_NT' : env.OS);
   env.COMSPEC = commandShell;
   env.PATHEXT = '.COM;.EXE;.BAT;.CMD';
-  env.PATH = [...new Set(trustedPathEntries.filter(Boolean))].join(path.delimiter);
+  env.PATH = [...new Set(trustedPathEntries.filter((entry): entry is string => Boolean(entry)))].join(path.delimiter);
 
   // Fixed verification capabilities invoke only repository-owned npm scripts.
   // Do not let ambient user/global npm configuration redirect their script shell,
