@@ -178,6 +178,9 @@ export class MillionDollarBuildModeStore {
     if (!status.effectiveActive) {
       return { authorized: false, reason: status.expired ? 'Million-Dollar Build Mode has expired.' : 'Million-Dollar Build Mode is inactive.' };
     }
+    if (!['READY', 'REPAIRING'].includes(task.state)) {
+      return { authorized: false, reason: `Task state ${task.state} is not runnable under Million-Dollar Build Mode standing authority.` };
+    }
     if (!taskEligibleForMillionDollarBuildMode(task)) {
       return { authorized: false, reason: 'Task is outside the fixed Million-Dollar Build Mode standing-authority policy.' };
     }
