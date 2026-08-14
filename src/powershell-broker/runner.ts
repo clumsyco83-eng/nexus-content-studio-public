@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { lstatSync } from 'node:fs';
 import path from 'node:path';
 import type { PowerShellInvocation } from './policy.js';
 
@@ -34,6 +35,22 @@ function trustedCommandShell(source: NodeJS.ProcessEnv = process.env): string {
   return path.win32.join(windowsRoot(source), 'System32', 'cmd.exe');
 }
 
+export function resolveTrustedGitExecutable(source: NodeJS.ProcessEnv = process.env): string | undefined {
+  const candidates: string[] = [];
+  if (source.ProgramFiles) candidates.push(path.win32.join(source.ProgramFiles, 'Git', 'cmd', 'git.exe'));
+  if (source['ProgramFiles(x86)']) candidates.push(path.win32.join(source['ProgramFiles(x86)'], 'Git', 'cmd', 'git.exe'));
+
+  for (const candidate of candidates) {
+    try {
+      const stat = lstatSync(candidate);
+      if (stat.isFile() && !stat.isSymbolicLink()) return candidate;
+    } catch {
+      // Missing/unreadable candidates are ignored; no ambient PATH fallback is allowed.
+    }
+  }
+  return undefined;
+}
+
 export function buildPowerShellBrokerEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of ENV_ALLOWLIST) {
@@ -43,8 +60,10 @@ export function buildPowerShellBrokerEnvironment(source: NodeJS.ProcessEnv = pro
 
   const root = windowsRoot(source);
   const commandShell = trustedCommandShell(source);
+  const trustedGit = resolveTrustedGitExecutable(source);
   const trustedPathEntries = [
     path.dirname(process.execPath),
+    trustedGit ? path.win32.dirname(trustedGit) : undefined,
     path.win32.join(root, 'System32'),
     path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0'),
     root,
@@ -53,11 +72,8 @@ export function buildPowerShellBrokerEnvironment(source: NodeJS.ProcessEnv = pro
   env.OS = source.OS ?? (process.platform === 'win32' ? 'Windows_NT' : env.OS);
   env.COMSPEC = commandShell;
   env.PATHEXT = '.COM;.EXE;.BAT;.CMD';
-  env.PATH = [...new Set(trustedPathEntries.filter(Boolean))].join(path.delimiter);
+  env.PATH = [...new Set(trustedPathEntries.filter((entry): entry is string => Boolean(entry)))].join(path.delimiter);
 
-  // Fixed verification capabilities invoke only repository-owned npm scripts.
-  // Do not let ambient user/global npm configuration redirect their script shell,
-  // inject a custom config, or add unrelated network/update behavior.
   env.NPM_CONFIG_SCRIPT_SHELL = commandShell;
   env.NPM_CONFIG_USERCONFIG = 'NUL';
   env.NPM_CONFIG_GLOBALCONFIG = 'NUL';
@@ -86,44 +102,20 @@ function terminateProcessTree(pid: number | undefined): void {
     killer.unref();
     return;
   }
-  try {
-    process.kill(pid, 'SIGKILL');
-  } catch {
-    // Process may have exited between timeout and kill; close handler remains authoritative.
-  }
+  try { process.kill(pid, 'SIGKILL'); } catch {}
 }
 
 export class NodePowerShellBrokerRunner implements PowerShellBrokerRunner {
   constructor(private readonly outputLimitBytes = 256 * 1024) {}
-
   async run(invocation: PowerShellInvocation): Promise<PowerShellRunnerResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn(invocation.file, invocation.args, {
-        cwd: invocation.cwd,
-        env: buildPowerShellBrokerEnvironment(),
-        shell: false,
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-
-      let stdout = '';
-      let stderr = '';
-      let timedOut = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        terminateProcessTree(child.pid);
-      }, invocation.timeoutMs);
-
+      const child = spawn(invocation.file, invocation.args, { cwd: invocation.cwd, env: buildPowerShellBrokerEnvironment(), shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = ''; let stderr = ''; let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; terminateProcessTree(child.pid); }, invocation.timeoutMs);
       child.stdout?.on('data', (chunk: Buffer) => { stdout = appendBounded(stdout, chunk, this.outputLimitBytes); });
       child.stderr?.on('data', (chunk: Buffer) => { stderr = appendBounded(stderr, chunk, this.outputLimitBytes); });
-      child.once('error', (error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-      child.once('close', (code) => {
-        clearTimeout(timer);
-        resolve({ exitCode: typeof code === 'number' ? code : -1, stdout, stderr, timedOut });
-      });
+      child.once('error', (error) => { clearTimeout(timer); reject(error); });
+      child.once('close', (code) => { clearTimeout(timer); resolve({ exitCode: typeof code === 'number' ? code : -1, stdout, stderr, timedOut }); });
     });
   }
 }
