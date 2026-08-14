@@ -1,4 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
+import path from 'node:path';
+import {
+  MillionDollarBuildModeStore,
+  taskEligibleForMillionDollarBuildMode,
+  type MillionDollarBuildModeStatus,
+} from '../safety/million-dollar-build-mode.js';
 import type { NexusStore } from '../storage/store.js';
 import type { StoredGoalTask, StoredGoalTaskApproval } from './schema.js';
 
@@ -8,6 +14,8 @@ export interface GoalTaskApprovalValidation {
   approved: boolean;
   reason?: string;
   approval?: StoredGoalTaskApproval;
+  authorizationSource?: 'NONE' | 'TASK_APPROVAL' | 'MILLION_DOLLAR_BUILD_MODE';
+  authorizationFingerprint?: string;
 }
 
 const sha256Pattern = /^[a-f0-9]{64}$/i;
@@ -70,11 +78,81 @@ function invalidate(approval: StoredGoalTaskApproval, reason: string, now: Date)
 }
 
 export class GoalTaskApprovalRepository {
-  constructor(private readonly store: NexusStore) {}
+  private readonly buildMode: MillionDollarBuildModeStore;
 
-  async listPending(): Promise<StoredGoalTaskApproval[]> {
-    const db = await this.store.load();
-    return db.goalTaskApprovals.filter((item) => item.status === 'PENDING').slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  constructor(private readonly store: NexusStore, buildMode?: MillionDollarBuildModeStore) {
+    const storageLocation = store.describe().location;
+    this.buildMode = buildMode ?? new MillionDollarBuildModeStore(
+      path.join(path.dirname(storageLocation), 'million-dollar-build-mode.json'),
+    );
+  }
+
+  async getMillionDollarBuildModeStatus(now = new Date()): Promise<MillionDollarBuildModeStatus> {
+    return this.buildMode.getStatus(now);
+  }
+
+  async activateMillionDollarBuildMode(activatedBy: string, now = new Date()): Promise<{ status: MillionDollarBuildModeStatus; releasedTasks: number }> {
+    const status = await this.buildMode.activate(activatedBy, now);
+    const releasedTasks = await this.releaseWaitingTasksAuthorizedByBuildMode(now);
+    return { status, releasedTasks };
+  }
+
+  async deactivateMillionDollarBuildMode(deactivatedBy: string, now = new Date()): Promise<MillionDollarBuildModeStatus> {
+    return this.buildMode.deactivate(deactivatedBy, now);
+  }
+
+  async releaseWaitingTasksAuthorizedByBuildMode(now = new Date()): Promise<number> {
+    if (!Number.isFinite(now.getTime())) throw new Error('Build Mode release time must be valid.');
+    const status = await this.buildMode.getStatus(now);
+    if (!status.effectiveActive) return 0;
+
+    return this.store.update((db) => {
+      let released = 0;
+      for (const task of db.goalTasks) {
+        if (task.state !== 'WAITING' || !taskEligibleForMillionDollarBuildMode(task)) continue;
+        const executionAttempt = nextGoalTaskExecutionAttempt(task);
+        const taskFingerprint = fingerprintGoalTask(task, executionAttempt);
+        const currentPending = db.goalTaskApprovals.filter((approval) =>
+          approval.goalId === task.goalId &&
+          approval.taskId === task.id &&
+          approval.status === 'PENDING' &&
+          approval.executionAttempt === executionAttempt &&
+          approval.taskFingerprint === taskFingerprint &&
+          validExpiry(approval, now),
+        );
+        if (currentPending.length < 1) continue;
+
+        for (const approval of currentPending) {
+          invalidate(approval, 'Superseded by active owner-authorized Million-Dollar Build Mode standing authority.', now);
+        }
+        task.state = 'READY';
+        task.updatedAt = now.toISOString();
+        const goal = db.goals.find((item) => item.id === task.goalId);
+        if (goal) {
+          goal.currentTaskId = task.id;
+          goal.updatedAt = now.toISOString();
+        }
+        released += 1;
+      }
+      return released;
+    });
+  }
+
+  async listPending(now = new Date()): Promise<StoredGoalTaskApproval[]> {
+    if (!Number.isFinite(now.getTime())) throw new Error('Approval listing time must be valid.');
+    return this.store.update((db) => {
+      for (const approval of db.goalTaskApprovals) {
+        if (approval.status === 'PENDING' && !validExpiry(approval, now)) {
+          approval.status = 'EXPIRED';
+          approval.resolvedAt = now.toISOString();
+          approval.invalidationReason = 'Approval TTL expired before dashboard listing.';
+        }
+      }
+      return db.goalTaskApprovals
+        .filter((item) => item.status === 'PENDING')
+        .slice()
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    });
   }
 
   async get(id: string): Promise<StoredGoalTaskApproval | undefined> {
@@ -99,6 +177,15 @@ export class GoalTaskApprovalRepository {
     }
     const now = input.now ?? new Date();
     if (!Number.isFinite(now.getTime())) throw new Error('Approval request time must be valid.');
+
+    const snapshot = await this.store.load();
+    const snapshotTask = snapshot.goalTasks.find((item) => item.id === input.taskId && item.goalId === input.goalId);
+    if (snapshotTask && snapshotTask.riskClass !== 'RED' && goalTaskRequiresOwnerApproval(snapshotTask)) {
+      const standing = await this.buildMode.authorizeTask(snapshotTask, now);
+      if (standing.authorized) {
+        throw new Error(`Task ${snapshotTask.id} is already covered by active Million-Dollar Build Mode standing authority; a per-task approval must not be created.`);
+      }
+    }
 
     return this.store.update((db) => {
       const goal = db.goals.find((item) => item.id === input.goalId);
@@ -145,11 +232,35 @@ export class GoalTaskApprovalRepository {
 
   async validateForTask(goalId: string, taskId: string, now = new Date()): Promise<GoalTaskApprovalValidation> {
     if (!Number.isFinite(now.getTime())) throw new Error('Approval validation time must be valid.');
+
+    const snapshot = await this.store.load();
+    const snapshotTask = snapshot.goalTasks.find((item) => item.id === taskId && item.goalId === goalId);
+    if (!snapshotTask) return { approved: false, reason: `Unknown task ${taskId} for goal ${goalId}.` };
+    if (snapshotTask.riskClass === 'RED') return { approved: false, reason: 'RED tasks are non-executable.' };
+    if (!goalTaskRequiresOwnerApproval(snapshotTask)) {
+      return { approved: true, reason: 'Task does not require owner approval.', authorizationSource: 'NONE' };
+    }
+
+    const standing = await this.buildMode.authorizeTask(snapshotTask, now);
+    if (standing.authorized && standing.stateFingerprint) {
+      const executionAttempt = nextGoalTaskExecutionAttempt(snapshotTask);
+      const taskFingerprint = fingerprintGoalTask(snapshotTask, executionAttempt);
+      const authorizationFingerprint = createHash('sha256')
+        .update(`${standing.stateFingerprint}:${taskFingerprint}:${executionAttempt}`)
+        .digest('hex');
+      return {
+        approved: true,
+        reason: standing.reason,
+        authorizationSource: 'MILLION_DOLLAR_BUILD_MODE',
+        authorizationFingerprint,
+      };
+    }
+
     return this.store.update((db) => {
       const task = db.goalTasks.find((item) => item.id === taskId && item.goalId === goalId);
       if (!task) return { approved: false, reason: `Unknown task ${taskId} for goal ${goalId}.` };
       if (task.riskClass === 'RED') return { approved: false, reason: 'RED tasks are non-executable.' };
-      if (!goalTaskRequiresOwnerApproval(task)) return { approved: true, reason: 'Task does not require owner approval.' };
+      if (!goalTaskRequiresOwnerApproval(task)) return { approved: true, reason: 'Task does not require owner approval.', authorizationSource: 'NONE' };
 
       const executionAttempt = nextGoalTaskExecutionAttempt(task);
       const fingerprint = fingerprintGoalTask(task, executionAttempt);
@@ -174,7 +285,14 @@ export class GoalTaskApprovalRepository {
           }
           continue;
         }
-        if (approval.status === 'APPROVED') return { approved: true, approval };
+        if (approval.status === 'APPROVED') {
+          return {
+            approved: true,
+            approval,
+            authorizationSource: 'TASK_APPROVAL',
+            authorizationFingerprint: createHash('sha256').update(`${approval.id}:${approval.taskFingerprint}:${approval.executionAttempt}`).digest('hex'),
+          };
+        }
         if (approval.status === 'DENIED') return { approved: false, approval, reason: 'Owner denied this execution attempt.' };
         if (approval.status === 'PENDING') return { approved: false, approval, reason: 'Owner approval is pending.' };
       }
