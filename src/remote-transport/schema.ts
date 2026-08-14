@@ -17,6 +17,7 @@ export const remoteCommandSchema = z.object({
     'nexus.intelligence-foundation.complete',
     'nexus.core-specialists.complete',
     'nexus.business-profile.complete',
+    'nexus.claude.live-readiness',
   ]),
   args: z.record(z.string().max(2_000)).default({}),
   requestedAt: z.string().datetime({ offset: true }),
