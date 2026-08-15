@@ -7,6 +7,7 @@ on:
       - 'src/testing/powershell-broker.ts'
       - 'src/testing/powershell-broker-v2.ts'
       - 'src/testing/powershell-broker-completion-v2.ts'
+      - 'src/testing/sanitized-secure-bridge-node24-diagnostic.ts'
       - 'scripts/powershell-broker-v1.ps1'
       - 'scripts/powershell-broker-completion-v2.ps1'
       - 'scripts/windows-laptop-verify-staged.ps1'
@@ -63,3 +64,5 @@ jobs:
           package-manager-cache: false
       - name: Verify sanitized broker/npm TypeScript regression under Node 24.18
         run: npm run verify:powershell-broker
+      - name: Reproduce sanitized Secure Bridge addendum under Node 24.18
+        run: npx.cmd tsx src/testing/sanitized-secure-bridge-node24-diagnostic.ts
