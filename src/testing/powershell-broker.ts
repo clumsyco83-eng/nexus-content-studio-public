@@ -121,9 +121,6 @@ async function main(): Promise<void> {
       const realGreen = request({
         id: 'req-green-windows', taskId: greenTask.id, capability: 'system.process.inspect', args: { processName: 'node' }, cwd: realRepoRoot, now,
       });
-      // Hosted Windows runners can cold-start Windows PowerShell slowly under the
-      // deliberately stripped environment. This changes only the smoke-test request,
-      // not the broker's production timeout policy or maximum.
       realGreen.timeoutMs = 90_000;
       const realLease = await realBroker.issueLease(realGreen, now);
       const realResult = await realBroker.execute(realGreen, realLease.id, new Date(now.getTime() + 1_000));
@@ -161,7 +158,8 @@ async function main(): Promise<void> {
       COMSPEC: 'C:\\attacker-controlled-bin\\cmd.exe',
       PATHEXT: '.EVIL',
       NPM_CONFIG_SCRIPT_SHELL: 'C:\\attacker-controlled-bin\\evil.exe',
-      NPM_CONFIG_USERCONFIG: 'C:\\attacker-controlled-bin\\npmrc',
+      NPM_CONFIG_USERCONFIG: 'C:\\attacker-controlled-bin\\npm-user-rc',
+      NPM_CONFIG_GLOBALCONFIG: 'C:\\attacker-controlled-bin\\npm-global-rc',
       OPENAI_API_KEY: 'secret-openai',
       GH_TOKEN: 'secret-github',
       NEXUS_DASHBOARD_TOKEN: 'secret-nexus',
@@ -172,8 +170,11 @@ async function main(): Promise<void> {
     assert.equal(env.COMSPEC, 'C:\\Windows\\System32\\cmd.exe');
     assert.equal(env.PATHEXT, '.COM;.EXE;.BAT;.CMD');
     assert.equal(env.NPM_CONFIG_SCRIPT_SHELL, 'C:\\Windows\\System32\\cmd.exe');
-    assert.equal(env.NPM_CONFIG_USERCONFIG, 'NUL');
-    assert.equal(env.NPM_CONFIG_GLOBALCONFIG, 'NUL');
+    assert.equal(env.NPM_CONFIG_USERCONFIG, 'C:\\NUL');
+    assert.equal(env.NPM_CONFIG_GLOBALCONFIG, 'C:\\Windows\\NUL');
+    assert.notEqual(env.NPM_CONFIG_USERCONFIG.toLowerCase(), env.NPM_CONFIG_GLOBALCONFIG.toLowerCase());
+    assert.equal(env.NPM_CONFIG_USERCONFIG.toLowerCase().includes('attacker-controlled-bin'), false);
+    assert.equal(env.NPM_CONFIG_GLOBALCONFIG.toLowerCase().includes('attacker-controlled-bin'), false);
     assert.equal(env.NPM_CONFIG_UPDATE_NOTIFIER, 'false');
     assert.equal(env.NPM_CONFIG_FUND, 'false');
     assert.equal(env.NPM_CONFIG_AUDIT, 'false');
@@ -181,7 +182,7 @@ async function main(): Promise<void> {
     assert.equal(env.GH_TOKEN, undefined);
     assert.equal(env.NEXUS_DASHBOARD_TOKEN, undefined);
 
-    console.log('PASS PowerShell Broker v1: fixed capability registry, exact cwd/args, literal-loopback health, injection rejection, one-shot leases, one fixed owner-approved YELLOW action, emergency stop, absolute system PowerShell, sanitized PATH/COMSPEC/npm configuration, direct argv -File execution, Windows real-process smoke, and secret-isolated environment without self-certification.');
+    console.log('PASS PowerShell Broker v1: fixed capability registry, exact cwd/args, literal-loopback health, injection rejection, one-shot leases, one fixed owner-approved YELLOW action, emergency stop, absolute system PowerShell, sanitized PATH/COMSPEC/npm configuration with npm-11-safe distinct null configs, direct argv -File execution, Windows real-process smoke, and secret-isolated environment without self-certification.');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
