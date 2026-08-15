@@ -79,6 +79,14 @@ function assertBootstrapExitCode(
   );
 }
 
+function assertPowerShellParses(powershell: string, script: string): void {
+  const parse = spawnSync(powershell, [
+    '-NoProfile', '-NonInteractive', '-Command',
+    `$e=$null;$t=$null;[System.Management.Automation.Language.Parser]::ParseFile('${script.replace(/'/g, "''")}',[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|ForEach-Object{Write-Error $_.Message};exit 1}`,
+  ], { cwd: repoRoot, windowsHide: true, encoding: 'utf8' });
+  assert.equal(parse.status, 0, parse.stderr || parse.stdout);
+}
+
 function main(): void {
   for (const capability of [
     'nexus.verification.run',
@@ -109,18 +117,25 @@ function main(): void {
     const systemRoot = process.env.SystemRoot ?? process.env.WINDIR ?? 'C:\\Windows';
     const powershell = path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     const script = path.join(repoRoot, 'scripts', 'powershell-broker-completion-v2.ps1');
-    const parse = spawnSync(powershell, [
-      '-NoProfile', '-NonInteractive', '-Command',
-      `$e=$null;$t=$null;[System.Management.Automation.Language.Parser]::ParseFile('${script.replace(/'/g, "''")}',[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|ForEach-Object{Write-Error $_.Message};exit 1}`,
-    ], { cwd: repoRoot, windowsHide: true, encoding: 'utf8' });
-    assert.equal(parse.status, 0, parse.stderr || parse.stdout);
+    const secureBridgeStaged = path.join(repoRoot, 'scripts', 'windows-secure-bridge-verify-staged.ps1');
 
+    assertPowerShellParses(powershell, script);
+    assertPowerShellParses(powershell, secureBridgeStaged);
+
+    const secureBridgeSelfTest = spawnSync(powershell, [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', secureBridgeStaged, '-SelfTest',
+    ], { cwd: repoRoot, windowsHide: true, encoding: 'utf8' });
+    assert.equal(secureBridgeSelfTest.status, 0, secureBridgeSelfTest.stderr || secureBridgeSelfTest.stdout);
+    assert.match(secureBridgeSelfTest.stdout, /PASS staged Secure Bridge Windows addendum failure-code mapping/);
+
+    // Remove Node/npm from PATH while keeping fixed Windows system tools. The wrapper
+    // must fail with capability-specific bootstrap codes rather than generic exit 1.
     assertBootstrapExitCode(powershell, script, 'nexus.verification.run', 60);
     assertBootstrapExitCode(powershell, script, 'nexus.intelligence-foundation.complete', 70);
     assertBootstrapExitCode(powershell, script, 'nexus.claude.live-readiness', 90);
   }
 
-  console.log('PASS staged completion broker v2: fixed YELLOW verification/intelligence/live-Claude routes, zero arbitrary args, trusted executable bootstrap, stage-specific exit codes, original broker retained for ordinary capabilities, strict remote schema, and Windows PowerShell parser/exit-code gates.');
+  console.log('PASS staged completion broker v2: fixed YELLOW verification/intelligence/live-Claude routes, zero arbitrary args, trusted executable bootstrap, bounded laptop and Secure Bridge stage-specific exit codes, original broker retained for ordinary capabilities, strict remote schema, and Windows PowerShell parser/exit-code gates.');
 }
 
 main();
