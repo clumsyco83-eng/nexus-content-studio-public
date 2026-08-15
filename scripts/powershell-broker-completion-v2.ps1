@@ -56,13 +56,20 @@ function Invoke-NpmStage {
     )
     $previousPreference = $ErrorActionPreference
     try {
+        # Windows PowerShell 5.1 can surface native stderr as ErrorRecord objects
+        # when streams are merged. Stage success is determined by the child exit
+        # code, not by harmless stderr text such as Git line-ending warnings.
         $ErrorActionPreference = 'Continue'
         & $NpmPath @Arguments *> $null
         $exitCode = [int]$LASTEXITCODE
         return ($exitCode -eq 0)
     }
-    catch { return $false }
-    finally { $ErrorActionPreference = $previousPreference }
+    catch {
+        return $false
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
 }
 
 function Invoke-NodeStage {
@@ -74,12 +81,21 @@ function Invoke-NodeStage {
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        if ($PassOutput) { & $NodePath @Arguments } else { & $NodePath @Arguments *> $null }
+        if ($PassOutput) {
+            & $NodePath @Arguments
+        }
+        else {
+            & $NodePath @Arguments *> $null
+        }
         $exitCode = [int]$LASTEXITCODE
         return ($exitCode -eq 0)
     }
-    catch { return $false }
-    finally { $ErrorActionPreference = $previousPreference }
+    catch {
+        return $false
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
 }
 
 function Invoke-NodeStageExitCode {
@@ -93,8 +109,12 @@ function Invoke-NodeStageExitCode {
         & $NodePath @Arguments *> $null
         return [int]$LASTEXITCODE
     }
-    catch { return -1 }
-    finally { $ErrorActionPreference = $previousPreference }
+    catch {
+        return -1
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
 }
 
 function Invoke-PowerShellStage {
@@ -111,8 +131,12 @@ function Invoke-PowerShellStage {
         $exitCode = [int]$LASTEXITCODE
         return ($exitCode -eq 0)
     }
-    catch { return $false }
-    finally { $ErrorActionPreference = $previousPreference }
+    catch {
+        return $false
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
 }
 
 function Invoke-PowerShellStageExitCode {
@@ -128,8 +152,12 @@ function Invoke-PowerShellStageExitCode {
         & $PowerShellPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ScriptPath @Arguments *> $null
         return [int]$LASTEXITCODE
     }
-    catch { return -1 }
-    finally { $ErrorActionPreference = $previousPreference }
+    catch {
+        return -1
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
 }
 
 function Resolve-VerifiedPackage {
@@ -138,6 +166,7 @@ function Resolve-VerifiedPackage {
         [Parameter(Mandatory = $true)][string]$FileName,
         [Parameter(Mandatory = $true)][string]$ExpectedSha256
     )
+
     try {
         if ($ExpectedSha256 -notmatch '^[0-9a-f]{64}$') { return $null }
         $candidates = @((Join-Path $RepoRoot $FileName))
@@ -148,11 +177,13 @@ function Resolve-VerifiedPackage {
                 (Join-Path $env:USERPROFILE "Documents\$FileName")
             )
         }
+
         foreach ($candidate in $candidates) {
             if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
             $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($actual -eq $ExpectedSha256) { return (Resolve-Path -LiteralPath $candidate).Path }
         }
+
         foreach ($root in @('C:\NEXUS-WORK', 'D:\NEXUS-MASTER-ARCHIVE', 'V:\NEXUS')) {
             if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
             $found = @(Get-ChildItem -LiteralPath $root -Filter $FileName -File -Recurse -ErrorAction SilentlyContinue)
@@ -163,6 +194,7 @@ function Resolve-VerifiedPackage {
         }
     }
     catch {}
+
     return $null
 }
 
@@ -173,36 +205,56 @@ try {
     if (-not (Test-Path -LiteralPath $RepoRoot -PathType Container)) { throw 'Repository root is missing.' }
     Set-Location -LiteralPath $RepoRoot
 }
-catch { exit $bootstrapFailureCode }
+catch {
+    exit $bootstrapFailureCode
+}
 
 switch ($Capability) {
     'nexus.verification.run' {
+        # 60 = trusted executable/bootstrap failure.
+        # 61..63 identify the failed fixed top-level verifier stage.
+        # 100..160 are bounded internal laptop-verifier stage codes.
+        # 161..170 are bounded internal Secure Bridge addendum stage codes.
+        # No raw verification output is exposed remotely.
         $powerShell = Resolve-TrustedSystemPowerShell
         $npm = Resolve-BrokerPathExecutable -Name 'npm.cmd'
         if ([string]::IsNullOrWhiteSpace($powerShell) -or [string]::IsNullOrWhiteSpace($npm)) { exit 60 }
+
         $laptopExit = Invoke-PowerShellStageExitCode -PowerShellPath $powerShell -ScriptPath (Join-Path $PSScriptRoot 'windows-laptop-verify-staged.ps1')
         if ($laptopExit -ne 0) {
             if ($laptopExit -ge 100 -and $laptopExit -le 160) { exit $laptopExit }
             exit 61
         }
+
         $secureBridgeExit = Invoke-PowerShellStageExitCode -PowerShellPath $powerShell -ScriptPath (Join-Path $PSScriptRoot 'windows-secure-bridge-verify-staged.ps1')
         if ($secureBridgeExit -ne 0) {
             if ($secureBridgeExit -ge 161 -and $secureBridgeExit -le 170) { exit $secureBridgeExit }
             exit 62
         }
+
         if (-not (Invoke-NpmStage -NpmPath $npm -Arguments @('run','verify:powershell-broker'))) { exit 63 }
-        [pscustomobject]@{ ok = $true; capability = $Capability; action = 'laptop-verification-no-install'; installPerformed = $false } | ConvertTo-Json -Compress
+
+        [pscustomobject]@{
+            ok = $true
+            capability = $Capability
+            action = 'laptop-verification-no-install'
+            installPerformed = $false
+        } | ConvertTo-Json -Compress
         exit 0
     }
 
     'nexus.intelligence-foundation.complete' {
+        # 70 = trusted executable/bootstrap failure.
+        # 71..82 identify only the failed fixed package/verification stage.
         $powerShell = Resolve-TrustedSystemPowerShell
         $npm = Resolve-BrokerPathExecutable -Name 'npm.cmd'
         if ([string]::IsNullOrWhiteSpace($powerShell) -or [string]::IsNullOrWhiteSpace($npm)) { exit 70 }
+
         $expectedHash = 'a4b546a141b8c9f163a84c607a9bc9210c39aa9a87b86aba20ce00311a01eba6'
         $zip = Resolve-VerifiedPackage -RepoRoot $RepoRoot -FileName 'nexus-intelligence-foundation-v1.0.0.zip' -ExpectedSha256 $expectedHash
         if ([string]::IsNullOrWhiteSpace([string]$zip)) { exit 71 }
         $skillsRoot = Join-Path $RepoRoot '.claude\skills'
+
         if (-not (Invoke-PowerShellStage -PowerShellPath $powerShell -ScriptPath (Join-Path $PSScriptRoot 'install-intelligence-foundation.ps1') -Arguments @('-ZipPath', $zip))) { exit 72 }
         if (-not (Invoke-PowerShellStage -PowerShellPath $powerShell -ScriptPath (Join-Path $PSScriptRoot 'verify-claude-skill-authoring.ps1') -Arguments @('-Profile','IntelligenceFoundation','-SkillsRoot',$skillsRoot))) { exit 73 }
         if (-not (Invoke-PowerShellStage -PowerShellPath $powerShell -ScriptPath (Join-Path $PSScriptRoot 'verify-claude-skill-authority.ps1') -Arguments @('-SkillsRoot',$skillsRoot))) { exit 74 }
@@ -214,19 +266,42 @@ switch ($Capability) {
         if (-not (Invoke-NpmStage -NpmPath $npm -Arguments @('run','verify:openai-strategy'))) { exit 80 }
         if (-not (Invoke-NpmStage -NpmPath $npm -Arguments @('run','verify:system'))) { exit 81 }
         if (-not (Invoke-PowerShellStage -PowerShellPath $powerShell -ScriptPath (Join-Path $PSScriptRoot 'windows-laptop-verify.ps1') -Arguments @('-SkipInstall'))) { exit 82 }
-        [pscustomobject]@{ ok = $true; capability = $Capability; packageSha256 = $expectedHash; deterministicHostGate = 'PASS'; liveClaudeRoutingStillRequired = $true } | ConvertTo-Json -Compress
+
+        [pscustomobject]@{
+            ok = $true
+            capability = $Capability
+            packageSha256 = $expectedHash
+            deterministicHostGate = 'PASS'
+            liveClaudeRoutingStillRequired = $true
+        } | ConvertTo-Json -Compress
         exit 0
     }
 
     'nexus.claude.live-readiness' {
+        # 90 = trusted Node/bootstrap failure.
+        # 91 = stored capability/model/version binding preflight.
+        # 92 = trusted Claude launcher resolution.
+        # 93 = bounded Secure Claude execution/version/provider stage.
+        # 94 = runtime stream evidence validation.
+        # 95 = fixed exact-result token mismatch.
+        # 96 = unexpected tool/MCP/skill authority exposure.
+        # 97 = unexpected live-readiness diagnostic failure.
+        # 98 = unclassified child exit outside the bounded stage range.
         $node = Resolve-BrokerPathExecutable -Name 'node.exe'
         if ([string]::IsNullOrWhiteSpace($node)) { exit 90 }
+
         $liveExit = Invoke-NodeStageExitCode -NodePath $node -Arguments @('--import','tsx','src/testing/secure-claude-live-readiness.ts')
         if ($liveExit -ne 0) {
             if ($liveExit -ge 91 -and $liveExit -le 97) { exit $liveExit }
             exit 98
         }
-        [pscustomobject]@{ ok = $true; capability = $Capability; action = 'bounded-one-turn-live-proof'; liveStage = 'PASS' } | ConvertTo-Json -Compress
+
+        [pscustomobject]@{
+            ok = $true
+            capability = $Capability
+            action = 'bounded-one-turn-live-proof'
+            liveStage = 'PASS'
+        } | ConvertTo-Json -Compress
         exit 0
     }
 }
