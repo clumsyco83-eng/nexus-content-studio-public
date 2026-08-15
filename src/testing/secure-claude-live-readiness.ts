@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { lstatSync } from 'node:fs';
 import path from 'node:path';
 import {
+  assertClaudeSafeModeSupported,
   buildSecureClaudeEnvironment,
   buildSecureClaudePrompt,
   defaultClaudeProcessRunner,
@@ -11,7 +12,7 @@ import {
   type ClaudeVersionReader,
   type SecureClaudeTaskContract,
 } from '../claude/secure-executor.js';
-import { parseClaudeStreamJson } from '../claude/runtime-evidence.js';
+import { assertClaudeCodeVersion, parseClaudeStreamJson } from '../claude/runtime-evidence.js';
 import { compileClaudeToolEnvelope } from '../claude/tool-envelope.js';
 import { JsonFileStore } from '../storage/store.js';
 
@@ -21,11 +22,11 @@ const MAX_COST_USD = 0.25;
 export const LIVE_READINESS_STAGE = {
   preflightBinding: 91,
   trustedLauncher: 92,
-  secureExecution: 93,
-  runtimeEvidence: 94,
-  exactResult: 95,
-  authorityEnvelope: 96,
-  unexpected: 97,
+  versionProbe: 93,
+  versionBinding: 94,
+  secureExecution: 95,
+  runtimeEvidence: 96,
+  postExecutionValidation: 97,
 } as const;
 
 type LiveReadinessStageCode = (typeof LIVE_READINESS_STAGE)[keyof typeof LIVE_READINESS_STAGE];
@@ -42,7 +43,7 @@ function failStage(stageCode: LiveReadinessStageCode): never {
 }
 
 export function classifyLiveReadinessError(error: unknown): LiveReadinessStageCode {
-  return error instanceof LiveReadinessStageError ? error.stageCode : LIVE_READINESS_STAGE.unexpected;
+  return error instanceof LiveReadinessStageError ? error.stageCode : LIVE_READINESS_STAGE.postExecutionValidation;
 }
 
 interface ClaudeLauncher {
@@ -149,7 +150,7 @@ function selfTest(): void {
   const stageCodes = Object.values(LIVE_READINESS_STAGE);
   assert.equal(new Set(stageCodes).size, stageCodes.length);
   assert.deepEqual(stageCodes, [91, 92, 93, 94, 95, 96, 97]);
-  assert.equal(classifyLiveReadinessError(new LiveReadinessStageError(91)), 91);
+  assert.equal(classifyLiveReadinessError(new LiveReadinessStageError(93)), 93);
   assert.equal(classifyLiveReadinessError(new Error('unclassified')), 97);
 
   console.log('PASS Secure Claude live-readiness policy and bounded stage mapping: one turn, no project paths, no tools/skills/MCP, no bypass, fixed launcher locations, bounded cost, safe mode, numeric failure stages 91-97, and no raw live failure detail exposure.');
@@ -212,6 +213,20 @@ async function liveProof(): Promise<void> {
     failStage(LIVE_READINESS_STAGE.trustedLauncher);
   }
 
+  let actualVersion = '';
+  try {
+    actualVersion = (await launcherVersionReader(launcher)()).trim();
+  } catch {
+    failStage(LIVE_READINESS_STAGE.versionProbe);
+  }
+
+  try {
+    assertClaudeCodeVersion(actualVersion, expectedVersion);
+    assertClaudeSafeModeSupported(actualVersion);
+  } catch {
+    failStage(LIVE_READINESS_STAGE.versionBinding);
+  }
+
   const task = fixedTask();
   const envelope = fixedEnvelope(projectRoot);
   let result;
@@ -225,7 +240,7 @@ async function liveProof(): Promise<void> {
       maxOutputBytes: 2 * 1024 * 1024,
     }, {
       runProcess: launcherRunner(launcher),
-      readVersion: launcherVersionReader(launcher),
+      readVersion: async () => actualVersion,
     });
   } catch {
     failStage(LIVE_READINESS_STAGE.secureExecution);
@@ -251,9 +266,9 @@ async function liveProof(): Promise<void> {
     failStage(LIVE_READINESS_STAGE.runtimeEvidence);
   }
 
-  if (evidence.resultText?.trim() !== RESULT_TOKEN) failStage(LIVE_READINESS_STAGE.exactResult);
+  if (evidence.resultText?.trim() !== RESULT_TOKEN) failStage(LIVE_READINESS_STAGE.postExecutionValidation);
   if (evidence.tools.length || evidence.mcpServers.length || evidence.invokedSkills.length) {
-    failStage(LIVE_READINESS_STAGE.authorityEnvelope);
+    failStage(LIVE_READINESS_STAGE.postExecutionValidation);
   }
 
   console.log(JSON.stringify({
