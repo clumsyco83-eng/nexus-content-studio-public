@@ -10,7 +10,10 @@ param(
     [switch]$Apply,
 
     [Parameter(Mandatory = $false)]
-    [switch]$SkipFullLaptopVerification
+    [switch]$SkipFullLaptopVerification,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$SelfTestNativeStderr
 )
 
 $ErrorActionPreference = 'Stop'
@@ -63,8 +66,66 @@ function Get-SkillTreeSha256 {
 function Invoke-Checked {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][scriptblock]$Command)
     Write-Step $Name
-    & $Command
-    if ($LASTEXITCODE -ne 0) { throw "$Name failed with exit code $LASTEXITCODE" }
+    $previousPreference = $ErrorActionPreference
+    $exitCode = 0
+    try {
+        # Windows PowerShell 5.1 can promote harmless native stderr into ErrorRecord
+        # objects when ErrorActionPreference=Stop. Completion success is determined
+        # by the child process exit code instead. During broker-driven apply/self-test
+        # runs, child output stays suppressed so stderr cannot leak back to the outer
+        # broker as a false terminating error. Interactive preview runs still display
+        # merged child output through the host stream.
+        $ErrorActionPreference = 'Continue'
+        $quietChildOutput = $SelfTestNativeStderr -or ($env:NEXUS_CORE_SPECIALIST_PROMOTION_APPLY -eq $OuterApplyOptIn)
+        if ($quietChildOutput) {
+            & $Command *> $null
+        }
+        else {
+            & $Command *>&1 | Out-Host
+        }
+        $exitCode = [int]$LASTEXITCODE
+    }
+    catch {
+        $exitCode = -1
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    if ($exitCode -ne 0) { throw "$Name failed with exit code $exitCode" }
+}
+
+function Invoke-NativeStderrSelfTest {
+    if ($env:OS -ne 'Windows_NT') { throw 'Native-stderr self-test is intentionally Windows-only.' }
+    if (-not $env:ComSpec -or -not (Test-Path -LiteralPath $env:ComSpec -PathType Leaf)) {
+        throw 'Trusted Windows command processor is unavailable for native-stderr self-test.'
+    }
+
+    Invoke-Checked -Name 'Self-test harmless native stderr with exit 0' -Command {
+        & $env:ComSpec /d /s /c "echo NEXUS_HARMLESS_STDERR 1>&2 & exit /b 0"
+    }
+
+    $nonZeroRejected = $false
+    try {
+        Invoke-Checked -Name 'Self-test real native failure with exit 7' -Command {
+            & $env:ComSpec /d /s /c "echo NEXUS_EXPECTED_FAILURE 1>&2 & exit /b 7"
+        }
+    }
+    catch {
+        if ($_.Exception.Message -match 'exit code 7') {
+            $nonZeroRejected = $true
+        }
+        else {
+            throw
+        }
+    }
+    if (-not $nonZeroRejected) { throw 'Native-stderr self-test did not reject a real nonzero child exit.' }
+
+    Write-Host 'PASS core specialist native-stderr classification self-test.' -ForegroundColor Green
+}
+
+if ($SelfTestNativeStderr) {
+    Invoke-NativeStderrSelfTest
+    exit 0
 }
 
 if ($env:OS -ne 'Windows_NT') { throw 'Core specialist promotion is intentionally Windows-host only.' }
@@ -124,13 +185,15 @@ try {
 
     Write-Host ''
     Write-Step 'FILE PROMOTION PREVIEW'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PromotionHelper -SourceSkillsRoot $ResolvedSource -DestinationSkillsRoot $DestinationSkillsRoot
-    if ($LASTEXITCODE -ne 0) { throw 'Core specialist file-promotion preview failed.' }
+    Invoke-Checked -Name 'Previewing exact-six project-local file promotion' -Command {
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PromotionHelper -SourceSkillsRoot $ResolvedSource -DestinationSkillsRoot $DestinationSkillsRoot
+    }
 
     Write-Host ''
     Write-Step 'CAPABILITY REGISTRATION PREVIEW'
-    & npm.cmd run core-specialists:capabilities -- --manifest $CapabilityManifest
-    if ($LASTEXITCODE -ne 0) { throw 'Core specialist capability-registration preview failed.' }
+    Invoke-Checked -Name 'Previewing core specialist capability registration' -Command {
+        & npm.cmd run core-specialists:capabilities -- --manifest $CapabilityManifest
+    }
 
     if (-not $Apply) {
         Write-Host ''
