@@ -174,5 +174,5 @@ export async function applyCoreSpecialistCandidates(
 
 export async function readCoreSpecialistCandidateManifest(filePath: string): Promise<unknown> {
   const raw = await readFile(path.resolve(filePath), 'utf8');
-  return JSON.parse(raw);
+  return JSON.parse(raw.replace(/^\uFEFF/, ''));
 }
