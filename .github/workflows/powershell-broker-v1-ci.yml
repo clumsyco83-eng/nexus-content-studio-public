@@ -56,3 +56,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Staged Windows verifier self-test failed with exit code $LASTEXITCODE" }
       - name: Exercise Node to broker to system PowerShell integration
         run: npm run verify:powershell-broker
+      - name: Switch to laptop Node 24.18 / npm 11
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.18.0'
+          package-manager-cache: false
+      - name: Verify sanitized broker/npm TypeScript regression under Node 24.18
+        run: npm run verify:powershell-broker
