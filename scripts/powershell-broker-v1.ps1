@@ -209,7 +209,7 @@ function Resolve-VerifiedPackage {
     foreach ($candidate in $candidates) {
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
         $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($actual -eq $ExpectedZipSha256) { return (Resolve-Path -LiteralPath $candidate).Path }
+        if ($actual -eq $ExpectedSha256) { return (Resolve-Path -LiteralPath $candidate).Path }
     }
 
     foreach ($root in @('C:\NEXUS-WORK', 'D:\NEXUS-MASTER-ARCHIVE', 'V:\NEXUS')) {
