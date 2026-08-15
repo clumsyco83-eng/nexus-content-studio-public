@@ -167,8 +167,10 @@ catch {
 switch ($Capability) {
     'nexus.verification.run' {
         # 60 = trusted executable/bootstrap failure.
-        # 61..63 identify the failed fixed verifier stage.
-        # 100..160 are bounded internal laptop-verifier stage codes; no raw output is exposed.
+        # 61..63 identify the failed fixed top-level verifier stage.
+        # 100..160 are bounded internal laptop-verifier stage codes.
+        # 161..170 are bounded internal Secure Bridge addendum stage codes.
+        # No raw verification output is exposed remotely.
         $powerShell = Resolve-TrustedSystemPowerShell
         $npm = Resolve-BrokerPathExecutable -Name 'npm.cmd'
         if ([string]::IsNullOrWhiteSpace($powerShell) -or [string]::IsNullOrWhiteSpace($npm)) { exit 60 }
@@ -178,7 +180,13 @@ switch ($Capability) {
             if ($laptopExit -ge 100 -and $laptopExit -le 160) { exit $laptopExit }
             exit 61
         }
-        if (-not (Invoke-PowerShellStage -PowerShellPath $powerShell -ScriptPath (Join-Path $PSScriptRoot 'windows-secure-bridge-verify.ps1'))) { exit 62 }
+
+        $secureBridgeExit = Invoke-PowerShellStageExitCode -PowerShellPath $powerShell -ScriptPath (Join-Path $PSScriptRoot 'windows-secure-bridge-verify-staged.ps1')
+        if ($secureBridgeExit -ne 0) {
+            if ($secureBridgeExit -ge 161 -and $secureBridgeExit -le 170) { exit $secureBridgeExit }
+            exit 62
+        }
+
         if (-not (Invoke-NpmStage -NpmPath $npm -Arguments @('run','verify:powershell-broker'))) { exit 63 }
 
         [pscustomobject]@{
