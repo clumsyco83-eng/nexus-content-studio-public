@@ -98,6 +98,25 @@ function Invoke-NodeStage {
     }
 }
 
+function Invoke-NodeStageExitCode {
+    param(
+        [Parameter(Mandatory = $true)][string]$NodePath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $NodePath @Arguments *> $null
+        return [int]$LASTEXITCODE
+    }
+    catch {
+        return -1
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
 function Invoke-PowerShellStage {
     param(
         [Parameter(Mandatory = $true)][string]$PowerShellPath,
@@ -259,10 +278,30 @@ switch ($Capability) {
     }
 
     'nexus.claude.live-readiness' {
-        # 90 = trusted Node/bootstrap failure; 91 = bounded live proof failed.
+        # 90 = trusted Node/bootstrap failure.
+        # 91 = stored capability/model/version binding preflight.
+        # 92 = trusted Claude launcher resolution.
+        # 93 = bounded Secure Claude execution/version/provider stage.
+        # 94 = runtime stream evidence validation.
+        # 95 = fixed exact-result token mismatch.
+        # 96 = unexpected tool/MCP/skill authority exposure.
+        # 97 = unexpected live-readiness diagnostic failure.
+        # 98 = unclassified child exit outside the bounded stage range.
         $node = Resolve-BrokerPathExecutable -Name 'node.exe'
         if ([string]::IsNullOrWhiteSpace($node)) { exit 90 }
-        if (-not (Invoke-NodeStage -NodePath $node -Arguments @('--import','tsx','src/testing/secure-claude-live-readiness.ts') -PassOutput)) { exit 91 }
+
+        $liveExit = Invoke-NodeStageExitCode -NodePath $node -Arguments @('--import','tsx','src/testing/secure-claude-live-readiness.ts')
+        if ($liveExit -ne 0) {
+            if ($liveExit -ge 91 -and $liveExit -le 97) { exit $liveExit }
+            exit 98
+        }
+
+        [pscustomobject]@{
+            ok = $true
+            capability = $Capability
+            action = 'bounded-one-turn-live-proof'
+            liveStage = 'PASS'
+        } | ConvertTo-Json -Compress
         exit 0
     }
 }
