@@ -99,6 +99,22 @@ function Invoke-PowerShellStage {
     }
 }
 
+function Invoke-PowerShellStageExitCode {
+    param(
+        [Parameter(Mandatory = $true)][string]$PowerShellPath,
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [string[]]$Arguments = @()
+    )
+    try {
+        if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) { return -1 }
+        & $PowerShellPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ScriptPath @Arguments *> $null
+        return [int]$LASTEXITCODE
+    }
+    catch {
+        return -1
+    }
+}
+
 function Resolve-VerifiedPackage {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
@@ -151,12 +167,17 @@ catch {
 switch ($Capability) {
     'nexus.verification.run' {
         # 60 = trusted executable/bootstrap failure.
-        # 61..63 identify the failed fixed verifier stage without exposing raw output.
+        # 61..63 identify the failed fixed verifier stage.
+        # 100..160 are bounded internal laptop-verifier stage codes; no raw output is exposed.
         $powerShell = Resolve-TrustedSystemPowerShell
         $npm = Resolve-BrokerPathExecutable -Name 'npm.cmd'
         if ([string]::IsNullOrWhiteSpace($powerShell) -or [string]::IsNullOrWhiteSpace($npm)) { exit 60 }
 
-        if (-not (Invoke-PowerShellStage -PowerShellPath $powerShell -ScriptPath (Join-Path $PSScriptRoot 'windows-laptop-verify.ps1') -Arguments @('-SkipInstall'))) { exit 61 }
+        $laptopExit = Invoke-PowerShellStageExitCode -PowerShellPath $powerShell -ScriptPath (Join-Path $PSScriptRoot 'windows-laptop-verify-staged.ps1')
+        if ($laptopExit -ne 0) {
+            if ($laptopExit -ge 100 -and $laptopExit -le 160) { exit $laptopExit }
+            exit 61
+        }
         if (-not (Invoke-PowerShellStage -PowerShellPath $powerShell -ScriptPath (Join-Path $PSScriptRoot 'windows-secure-bridge-verify.ps1'))) { exit 62 }
         if (-not (Invoke-NpmStage -NpmPath $npm -Arguments @('run','verify:powershell-broker'))) { exit 63 }
 
