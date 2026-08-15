@@ -9,6 +9,7 @@ on:
       - 'src/testing/powershell-broker-completion-v2.ts'
       - 'scripts/powershell-broker-v1.ps1'
       - 'scripts/powershell-broker-completion-v2.ps1'
+      - 'scripts/windows-laptop-verify-staged.ps1'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/powershell-broker-v1-ci.yml'
@@ -48,5 +49,10 @@ jobs:
         run: |
           powershell.exe -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File scripts/powershell-broker-v1.ps1 -Capability system.process.inspect -ProcessName nexus-process-that-does-not-exist
           if ($LASTEXITCODE -ne 0) { throw "PowerShell Broker fixed-script regression failed with exit code $LASTEXITCODE" }
+      - name: Exercise staged Windows verifier code mapping
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/windows-laptop-verify-staged.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "Staged Windows verifier self-test failed with exit code $LASTEXITCODE" }
       - name: Exercise Node to broker to system PowerShell integration
         run: npm run verify:powershell-broker
