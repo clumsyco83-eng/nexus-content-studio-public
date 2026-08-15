@@ -26,6 +26,7 @@ id_ed25519*
 # NEXUS runtime state and generated artifacts
 data/
 output/
+.claude/skills-backup/
 *.db
 *.sqlite
 *.sqlite3
