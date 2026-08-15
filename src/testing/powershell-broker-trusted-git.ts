@@ -36,6 +36,7 @@ function main(): void {
 
   assert.ok(env.NPM_CONFIG_USERCONFIG, 'Sanitized npm user config path must be fixed.');
   assert.ok(env.NPM_CONFIG_GLOBALCONFIG, 'Sanitized npm global config path must be fixed.');
+  assert.ok(env.COMSPEC, 'Trusted command shell must be fixed.');
   assert.equal(path.win32.isAbsolute(env.NPM_CONFIG_USERCONFIG), true);
   assert.equal(path.win32.isAbsolute(env.NPM_CONFIG_GLOBALCONFIG), true);
   assert.equal(path.win32.basename(env.NPM_CONFIG_USERCONFIG).toUpperCase(), 'NUL');
@@ -56,7 +57,7 @@ function main(): void {
   }).trim();
   assert.match(version, /^git version\s+/i);
 
-  const npmVersion = execFileSync('npm.cmd', ['--version'], {
+  const npmVersion = execFileSync(env.COMSPEC, ['/d', '/s', '/c', 'npm.cmd --version'], {
     env,
     encoding: 'utf8',
     windowsHide: true,
@@ -64,7 +65,7 @@ function main(): void {
   }).trim();
   assert.match(npmVersion, /^\d+\.\d+\.\d+/);
 
-  execFileSync('npm.cmd', ['run', 'check'], {
+  execFileSync(env.COMSPEC, ['/d', '/s', '/c', 'npm.cmd run check'], {
     cwd: process.cwd(),
     env,
     encoding: 'utf8',
@@ -72,7 +73,7 @@ function main(): void {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  console.log('PASS PowerShell Broker trusted-Git/npm regression: fixed Program Files Git and sanitized npm TypeScript execution work with distinct absolute null-device config paths while ambient PATH/config/secrets remain excluded.');
+  console.log('PASS PowerShell Broker trusted-Git/npm regression: fixed Program Files Git and sanitized npm TypeScript execution work through the trusted command shell with distinct absolute null-device config paths while ambient PATH/config/secrets remain excluded.');
 }
 
 main();
