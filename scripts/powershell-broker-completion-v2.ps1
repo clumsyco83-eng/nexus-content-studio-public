@@ -54,12 +54,21 @@ function Invoke-NpmStage {
         [Parameter(Mandatory = $true)][string]$NpmPath,
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
+    $previousPreference = $ErrorActionPreference
     try {
+        # Windows PowerShell 5.1 can surface native stderr as ErrorRecord objects
+        # when streams are merged. Stage success is determined by the child exit
+        # code, not by harmless stderr text such as Git line-ending warnings.
+        $ErrorActionPreference = 'Continue'
         & $NpmPath @Arguments *> $null
-        return ($LASTEXITCODE -eq 0)
+        $exitCode = [int]$LASTEXITCODE
+        return ($exitCode -eq 0)
     }
     catch {
         return $false
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
     }
 }
 
@@ -69,17 +78,23 @@ function Invoke-NodeStage {
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [switch]$PassOutput
     )
+    $previousPreference = $ErrorActionPreference
     try {
+        $ErrorActionPreference = 'Continue'
         if ($PassOutput) {
             & $NodePath @Arguments
         }
         else {
             & $NodePath @Arguments *> $null
         }
-        return ($LASTEXITCODE -eq 0)
+        $exitCode = [int]$LASTEXITCODE
+        return ($exitCode -eq 0)
     }
     catch {
         return $false
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
     }
 }
 
@@ -89,13 +104,19 @@ function Invoke-PowerShellStage {
         [Parameter(Mandatory = $true)][string]$ScriptPath,
         [string[]]$Arguments = @()
     )
+    if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) { return $false }
+    $previousPreference = $ErrorActionPreference
     try {
-        if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) { return $false }
+        $ErrorActionPreference = 'Continue'
         & $PowerShellPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ScriptPath @Arguments *> $null
-        return ($LASTEXITCODE -eq 0)
+        $exitCode = [int]$LASTEXITCODE
+        return ($exitCode -eq 0)
     }
     catch {
         return $false
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
     }
 }
 
@@ -105,13 +126,18 @@ function Invoke-PowerShellStageExitCode {
         [Parameter(Mandatory = $true)][string]$ScriptPath,
         [string[]]$Arguments = @()
     )
+    if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) { return -1 }
+    $previousPreference = $ErrorActionPreference
     try {
-        if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) { return -1 }
+        $ErrorActionPreference = 'Continue'
         & $PowerShellPath -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ScriptPath @Arguments *> $null
         return [int]$LASTEXITCODE
     }
     catch {
         return -1
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
     }
 }
 
