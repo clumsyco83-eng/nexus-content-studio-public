@@ -12,6 +12,7 @@ on:
       - 'scripts/powershell-broker-completion-v2.ps1'
       - 'scripts/complete-core-specialist-promotion.ps1'
       - 'scripts/windows-laptop-verify-staged.ps1'
+      - 'scripts/windows-broker-child-stderr-regression.ps1'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/powershell-broker-v1-ci.yml'
@@ -61,6 +62,11 @@ jobs:
         run: |
           powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/complete-core-specialist-promotion.ps1 -SelfTestNativeStderr
           if ($LASTEXITCODE -ne 0) { throw "Core-specialist native-stderr self-test failed with exit code $LASTEXITCODE" }
+      - name: Verify broker child stderr classification
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/windows-broker-child-stderr-regression.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Broker child-stderr regression failed with exit code $LASTEXITCODE" }
       - name: Exercise Node to broker to system PowerShell integration
         run: npm run verify:powershell-broker
       - name: Switch to laptop Node 24.18 / npm 11
@@ -68,6 +74,11 @@ jobs:
         with:
           node-version: '24.18.0'
           package-manager-cache: false
+      - name: Verify broker child stderr classification under Node 24.18 / npm 11
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/windows-broker-child-stderr-regression.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Broker child-stderr Node24 regression failed with exit code $LASTEXITCODE" }
       - name: Verify sanitized broker/npm TypeScript regression under Node 24.18
         run: npm run verify:powershell-broker
       - name: Verify full sanitized completion-v2 wrapper under Node 24.18
