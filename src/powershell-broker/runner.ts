@@ -35,6 +35,16 @@ function trustedCommandShell(source: NodeJS.ProcessEnv = process.env): string {
   return path.win32.join(windowsRoot(source), 'System32', 'cmd.exe');
 }
 
+function isolatedNpmConfigPaths(root: string): { user: string; global: string } {
+  const volumeRoot = path.win32.parse(root).root || 'C:\\';
+  const user = path.win32.join(volumeRoot, 'NUL');
+  const candidateGlobal = path.win32.join(root, 'NUL');
+  const global = candidateGlobal.toLowerCase() === user.toLowerCase()
+    ? path.win32.join(root, 'System32', 'NUL')
+    : candidateGlobal;
+  return { user, global };
+}
+
 export function resolveTrustedGitExecutable(source: NodeJS.ProcessEnv = process.env): string | undefined {
   const candidates: string[] = [];
   if (source.ProgramFiles) candidates.push(path.win32.join(source.ProgramFiles, 'Git', 'cmd', 'git.exe'));
@@ -76,10 +86,13 @@ export function buildPowerShellBrokerEnvironment(source: NodeJS.ProcessEnv = pro
 
   // Fixed verification capabilities invoke only repository-owned npm scripts.
   // Do not let ambient user/global npm configuration redirect their script shell,
-  // inject a custom config, or add unrelated network/update behavior.
+  // inject a custom config, or add unrelated network/update behavior. npm 11
+  // rejects loading the same path for both user/global config, so use two
+  // distinct absolute Windows null-device paths instead of duplicate "NUL".
+  const npmConfig = isolatedNpmConfigPaths(root);
   env.NPM_CONFIG_SCRIPT_SHELL = commandShell;
-  env.NPM_CONFIG_USERCONFIG = 'NUL';
-  env.NPM_CONFIG_GLOBALCONFIG = 'NUL';
+  env.NPM_CONFIG_USERCONFIG = npmConfig.user;
+  env.NPM_CONFIG_GLOBALCONFIG = npmConfig.global;
   env.NPM_CONFIG_UPDATE_NOTIFIER = 'false';
   env.NPM_CONFIG_FUND = 'false';
   env.NPM_CONFIG_AUDIT = 'false';
