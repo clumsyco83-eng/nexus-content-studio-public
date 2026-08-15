@@ -56,10 +56,27 @@ function Invoke-GitChecked {
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
-    $output = @(& $Git -C $RepoRoot @Arguments 2>&1)
-    if ($LASTEXITCODE -ne 0) {
+
+    # Windows PowerShell 5.1 promotes native stderr redirected through 2>&1 into
+    # ErrorRecord objects. With the broker-wide ErrorActionPreference=Stop this can
+    # terminate a successful Git command (notably fetch/merge progress) before the
+    # child exit code is inspected. Treat native stderr as output while the trusted
+    # Git process runs, then make the process exit code authoritative.
+    $previousPreference = $ErrorActionPreference
+    $output = @()
+    $exitCode = -1
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $Git -C $RepoRoot @Arguments 2>&1)
+        $exitCode = [int]$LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    if ($exitCode -ne 0) {
         $detail = ($output | Out-String).Trim()
-        throw "Git command failed safe (exitCode=$LASTEXITCODE): $detail"
+        throw "Git command failed safe (exitCode=$exitCode): $detail"
     }
     return $output
 }
@@ -354,10 +371,15 @@ switch ($Capability) {
         if ($changes.Count -ne 0) { throw 'Repository sync requires a completely clean worktree.' }
 
         $beforeHead = ((Invoke-GitChecked -Git $git -RepoRoot $repoRoot -Arguments @('rev-parse', 'HEAD')) | Out-String).Trim().ToLowerInvariant()
-        Invoke-GitChecked -Git $git -RepoRoot $repoRoot -Arguments @('fetch', '--prune', 'origin', 'main') | Out-Null
+        try {
+            Invoke-GitChecked -Git $git -RepoRoot $repoRoot -Arguments @('fetch', '--prune', 'origin', 'main') | Out-Null
+        }
+        catch {
+            exit 41
+        }
         $fetchedHead = ((Invoke-GitChecked -Git $git -RepoRoot $repoRoot -Arguments @('rev-parse', 'FETCH_HEAD')) | Out-String).Trim().ToLowerInvariant()
         $expected = $ExpectedHead.ToLowerInvariant()
-        if ($fetchedHead -ne $expected) { throw "Fetched origin/main does not match the owner-approved expectedHead. expected=$expected fetched=$fetchedHead" }
+        if ($fetchedHead -ne $expected) { exit 42 }
 
         $changedPaths = @(
             (Invoke-GitChecked -Git $git -RepoRoot $repoRoot -Arguments @('diff', '--name-only', 'HEAD', 'FETCH_HEAD')) |
@@ -378,16 +400,19 @@ switch ($Capability) {
             $_.StartsWith('src/powershell-broker/', [StringComparison]::OrdinalIgnoreCase) -or
             $_.StartsWith('src/remote-transport/', [StringComparison]::OrdinalIgnoreCase)
         })
-        if ($blockedPaths.Count -gt 0) {
-            throw "Repository sync requires manual bootstrap because the approved update changes broker/transport/bootstrap authority files: $($blockedPaths -join ', ')"
-        }
+        if ($blockedPaths.Count -gt 0) { exit 43 }
 
         & $git -C $repoRoot merge-base --is-ancestor HEAD FETCH_HEAD 2>$null
-        if ($LASTEXITCODE -ne 0) { throw 'Repository sync refused a non-fast-forward update.' }
+        if ($LASTEXITCODE -ne 0) { exit 44 }
 
-        Invoke-GitChecked -Git $git -RepoRoot $repoRoot -Arguments @('merge', '--ff-only', 'FETCH_HEAD') | Out-Null
+        try {
+            Invoke-GitChecked -Git $git -RepoRoot $repoRoot -Arguments @('merge', '--ff-only', 'FETCH_HEAD') | Out-Null
+        }
+        catch {
+            exit 45
+        }
         $afterHead = ((Invoke-GitChecked -Git $git -RepoRoot $repoRoot -Arguments @('rev-parse', 'HEAD')) | Out-String).Trim().ToLowerInvariant()
-        if ($afterHead -ne $expected) { throw "Repository sync verification failed. expected=$expected actual=$afterHead" }
+        if ($afterHead -ne $expected) { exit 46 }
 
         [pscustomobject]@{
             ok = $true
