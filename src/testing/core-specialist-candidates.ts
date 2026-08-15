@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { CapabilityRegistry, capabilityReadiness } from '../capabilities/registry.js';
@@ -8,6 +8,7 @@ import {
   CORE_SPECIALIST_CAPABILITY_APPLY_OPT_IN,
   CORE_SPECIALIST_NAMES,
   previewCoreSpecialistCandidates,
+  readCoreSpecialistCandidateManifest,
 } from '../capabilities/core-specialist-candidates.js';
 import { JsonFileStore } from '../storage/store.js';
 
@@ -32,6 +33,16 @@ async function main(): Promise<void> {
   try {
     const file = path.join(root, 'nexus.json');
     const store = new JsonFileStore(file);
+
+    const bomManifestFile = path.join(root, 'manifest-bom.json');
+    const bomManifest = manifest();
+    await writeFile(bomManifestFile, `\uFEFF${JSON.stringify(bomManifest)}`, 'utf8');
+    assert.deepEqual(
+      await readCoreSpecialistCandidateManifest(bomManifestFile),
+      bomManifest,
+      'Windows PowerShell 5.1 UTF-8 BOM manifests must parse successfully.',
+    );
+
     const preview = await previewCoreSpecialistCandidates(store, manifest());
     assert.equal(preview.mode, 'preview');
     assert.equal(preview.items.length, 6);
@@ -103,7 +114,7 @@ async function main(): Promise<void> {
     duplicate.candidates[5]!.name = duplicate.candidates[0]!.name;
     await assert.rejects(() => previewCoreSpecialistCandidates(new JsonFileStore(path.join(root, 'dup.json')), duplicate), /duplicate|missing/i);
 
-    console.log('PASS core specialist candidate registration: preview is read-only, apply requires explicit opt-in, six exact SKILL capabilities remain NOT READY, existing evidence is preserved, and source/kind/duplicate conflicts fail closed.');
+    console.log('PASS core specialist candidate registration: preview is read-only, UTF-8 BOM manifests are accepted, apply requires explicit opt-in, six exact SKILL capabilities remain NOT READY, existing evidence is preserved, and source/kind/duplicate conflicts fail closed.');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
