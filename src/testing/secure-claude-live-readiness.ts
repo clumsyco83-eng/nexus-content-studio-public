@@ -95,8 +95,8 @@ function fixedTask(): SecureClaudeTaskContract {
     id: 'nexus-claude-live-readiness',
     goalId: 'nexus-million-dollar-build',
     title: 'Prove bounded NEXUS to Claude Code execution',
-    intent: `Return exactly ${RESULT_TOKEN} and nothing else. Do not use tools or access project files.`,
-    acceptanceCriteria: [`Claude returns exactly ${RESULT_TOKEN}.`],
+    intent: `Your entire final response must be the ASCII token ${RESULT_TOKEN}. Output that token directly with no Markdown, code fence, quotes, punctuation, explanation, prefix, or suffix. Do not use tools or access project files.`,
+    acceptanceCriteria: [`Claude returns exactly ${RESULT_TOKEN} with no semantic content before or after it.`],
     verificationPlan: [`criterion:1:runtime-exact-result:${RESULT_TOKEN}`],
     allowedPaths: [],
     forbiddenPaths: ['.env', '.env.*', 'secrets/**', '.claude/**'],
@@ -127,6 +127,16 @@ function fixedEnvelope(projectRoot: string) {
   }, projectRoot);
 }
 
+export function matchesLiveReadinessResult(value: string | undefined): boolean {
+  const trimmed = value?.trim() ?? '';
+  if (!trimmed) return false;
+  if (trimmed === RESULT_TOKEN) return true;
+  if (trimmed === `\`${RESULT_TOKEN}\`` || trimmed === `"${RESULT_TOKEN}"` || trimmed === `'${RESULT_TOKEN}'`) return true;
+
+  const fenced = trimmed.match(/^```(?:text)?[ \t]*(?:\r?\n)?([\s\S]*?)(?:\r?\n)?```$/);
+  return fenced?.[1]?.trim() === RESULT_TOKEN;
+}
+
 function selfTest(): void {
   const projectRoot = path.resolve('C:\\NEXUS-WORK\\nexus-content-studio-current-main');
   const task = fixedTask();
@@ -141,7 +151,19 @@ function selfTest(): void {
   assert.ok(envelope.cliArgs.includes('--strict-mcp-config'));
   assert.ok(envelope.cliArgs.includes('--no-chrome'));
   assert.match(prompt, /no project mutation authority is granted/i);
+  assert.match(prompt, /no Markdown, code fence, quotes, punctuation, explanation, prefix, or suffix/i);
   assert.doesNotMatch(envelope.cliArgs.join(' '), /dangerously-skip-permissions|bypassPermissions/i);
+
+  assert.equal(matchesLiveReadinessResult(RESULT_TOKEN), true);
+  assert.equal(matchesLiveReadinessResult(`  ${RESULT_TOKEN}\r\n`), true);
+  assert.equal(matchesLiveReadinessResult(`\`${RESULT_TOKEN}\``), true);
+  assert.equal(matchesLiveReadinessResult(`"${RESULT_TOKEN}"`), true);
+  assert.equal(matchesLiveReadinessResult(`'${RESULT_TOKEN}'`), true);
+  assert.equal(matchesLiveReadinessResult(`\`\`\`\n${RESULT_TOKEN}\n\`\`\``), true);
+  assert.equal(matchesLiveReadinessResult(`\`\`\`text\n${RESULT_TOKEN}\n\`\`\``), true);
+  assert.equal(matchesLiveReadinessResult(`${RESULT_TOKEN}.`), false);
+  assert.equal(matchesLiveReadinessResult(`Result: ${RESULT_TOKEN}`), false);
+  assert.equal(matchesLiveReadinessResult(`${RESULT_TOKEN}\nextra`), false);
 
   const fake = trustedClaudeLauncherCandidates({ USERPROFILE: 'C:\\Users\\test', APPDATA: 'C:\\Users\\test\\AppData\\Roaming' });
   assert.equal(fake[0]?.command, 'C:\\Users\\test\\.local\\bin\\claude.exe');
@@ -153,7 +175,7 @@ function selfTest(): void {
   assert.equal(classifyLiveReadinessError(new LiveReadinessStageError(93)), 93);
   assert.equal(classifyLiveReadinessError(new Error('unclassified')), 97);
 
-  console.log('PASS Secure Claude live-readiness policy and bounded stage mapping: one turn, no project paths, no tools/skills/MCP, no bypass, fixed launcher locations, bounded cost, safe mode, numeric failure stages 91-97, and no raw live failure detail exposure.');
+  console.log('PASS Secure Claude live-readiness policy and bounded stage mapping: one turn, no project paths, no tools/skills/MCP, no bypass, fixed launcher locations, bounded cost, safe mode, strict token-only semantics with presentation-wrapper tolerance, numeric failure stages 91-97, and no raw live failure detail exposure.');
 }
 
 function launcherRunner(launcher: ClaudeLauncher): ClaudeProcessRunner {
@@ -266,7 +288,7 @@ async function liveProof(): Promise<void> {
     failStage(LIVE_READINESS_STAGE.runtimeEvidence);
   }
 
-  if (evidence.resultText?.trim() !== RESULT_TOKEN) failStage(LIVE_READINESS_STAGE.postExecutionValidation);
+  if (!matchesLiveReadinessResult(evidence.resultText)) failStage(LIVE_READINESS_STAGE.postExecutionValidation);
   if (evidence.tools.length || evidence.mcpServers.length || evidence.invokedSkills.length) {
     failStage(LIVE_READINESS_STAGE.postExecutionValidation);
   }
