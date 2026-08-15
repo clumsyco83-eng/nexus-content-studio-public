@@ -137,9 +137,24 @@ function Wait-NexusHealth {
 
 function Invoke-NpmCheckedQuiet {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
-    & npm.cmd @Arguments *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Fixed npm verification failed safe: npm $($Arguments -join ' ')"
+
+    # Windows PowerShell 5.1 can promote native stderr into ErrorRecord objects
+    # while the broker-wide ErrorActionPreference is Stop. Child process exit code
+    # is authoritative; harmless stderr from a successful npm command must not be
+    # treated as a broker failure.
+    $previousPreference = $ErrorActionPreference
+    $exitCode = -1
+    try {
+        $ErrorActionPreference = 'Continue'
+        & npm.cmd @Arguments *> $null
+        $exitCode = [int]$LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    if ($exitCode -ne 0) {
+        throw "Fixed npm verification failed safe (exitCode=$exitCode): npm $($Arguments -join ' ')"
     }
 }
 
@@ -151,9 +166,23 @@ function Invoke-PowerShellScriptCheckedQuiet {
     if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
         throw "Required repository-owned helper is missing: $([IO.Path]::GetFileName($ScriptPath))"
     }
-    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ScriptPath @Arguments *> $null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Fixed repository-owned helper failed safe: $([IO.Path]::GetFileName($ScriptPath))"
+
+    # Apply the same native-child rule to repository-owned Windows PowerShell
+    # helpers: suppress child streams, capture the real process exit code, and
+    # restore the broker's Stop preference before classifying success/failure.
+    $previousPreference = $ErrorActionPreference
+    $exitCode = -1
+    try {
+        $ErrorActionPreference = 'Continue'
+        & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ScriptPath @Arguments *> $null
+        $exitCode = [int]$LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+
+    if ($exitCode -ne 0) {
+        throw "Fixed repository-owned helper failed safe (exitCode=$exitCode): $([IO.Path]::GetFileName($ScriptPath))"
     }
 }
 
@@ -180,7 +209,7 @@ function Resolve-VerifiedPackage {
     foreach ($candidate in $candidates) {
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
         $actual = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($actual -eq $ExpectedSha256) { return (Resolve-Path -LiteralPath $candidate).Path }
+        if ($actual -eq $ExpectedZipSha256) { return (Resolve-Path -LiteralPath $candidate).Path }
     }
 
     foreach ($root in @('C:\NEXUS-WORK', 'D:\NEXUS-MASTER-ARCHIVE', 'V:\NEXUS')) {
