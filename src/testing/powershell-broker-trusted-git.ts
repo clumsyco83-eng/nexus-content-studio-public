@@ -5,7 +5,7 @@ import { buildPowerShellBrokerEnvironment, resolveTrustedGitExecutable } from '.
 
 function main(): void {
   if (process.platform !== 'win32') {
-    console.log('SKIP PowerShell Broker trusted-Git regression: Windows-only executable resolution.');
+    console.log('SKIP PowerShell Broker trusted-Git/npm regression: Windows-only executable resolution.');
     return;
   }
 
@@ -15,7 +15,8 @@ function main(): void {
     COMSPEC: 'C:\\attacker-controlled-bin\\cmd.exe',
     PATHEXT: '.EVIL',
     NPM_CONFIG_SCRIPT_SHELL: 'C:\\attacker-controlled-bin\\evil.exe',
-    NPM_CONFIG_USERCONFIG: 'C:\\attacker-controlled-bin\\npmrc',
+    NPM_CONFIG_USERCONFIG: 'C:\\attacker-controlled-bin\\npm-user-rc',
+    NPM_CONFIG_GLOBALCONFIG: 'C:\\attacker-controlled-bin\\npm-global-rc',
     OPENAI_API_KEY: 'secret-openai',
     GH_TOKEN: 'secret-github',
     NEXUS_DASHBOARD_TOKEN: 'secret-nexus',
@@ -33,6 +34,20 @@ function main(): void {
   assert.equal(env.GH_TOKEN, undefined);
   assert.equal(env.NEXUS_DASHBOARD_TOKEN, undefined);
 
+  assert.ok(env.NPM_CONFIG_USERCONFIG, 'Sanitized npm user config path must be fixed.');
+  assert.ok(env.NPM_CONFIG_GLOBALCONFIG, 'Sanitized npm global config path must be fixed.');
+  assert.equal(path.win32.isAbsolute(env.NPM_CONFIG_USERCONFIG), true);
+  assert.equal(path.win32.isAbsolute(env.NPM_CONFIG_GLOBALCONFIG), true);
+  assert.equal(path.win32.basename(env.NPM_CONFIG_USERCONFIG).toUpperCase(), 'NUL');
+  assert.equal(path.win32.basename(env.NPM_CONFIG_GLOBALCONFIG).toUpperCase(), 'NUL');
+  assert.notEqual(
+    env.NPM_CONFIG_USERCONFIG.toLowerCase(),
+    env.NPM_CONFIG_GLOBALCONFIG.toLowerCase(),
+    'npm 11 must receive distinct user/global config paths to avoid double-loading rejection.',
+  );
+  assert.equal(env.NPM_CONFIG_USERCONFIG.toLowerCase().includes('attacker-controlled-bin'), false);
+  assert.equal(env.NPM_CONFIG_GLOBALCONFIG.toLowerCase().includes('attacker-controlled-bin'), false);
+
   const version = execFileSync('git.exe', ['--version'], {
     env,
     encoding: 'utf8',
@@ -41,7 +56,23 @@ function main(): void {
   }).trim();
   assert.match(version, /^git version\s+/i);
 
-  console.log('PASS PowerShell Broker trusted-Git regression: fixed Program Files Git resolves inside the sanitized environment while ambient PATH and secrets remain excluded.');
+  const npmVersion = execFileSync('npm.cmd', ['--version'], {
+    env,
+    encoding: 'utf8',
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+  assert.match(npmVersion, /^\d+\.\d+\.\d+/);
+
+  execFileSync('npm.cmd', ['run', 'check'], {
+    cwd: process.cwd(),
+    env,
+    encoding: 'utf8',
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  console.log('PASS PowerShell Broker trusted-Git/npm regression: fixed Program Files Git and sanitized npm TypeScript execution work with distinct absolute null-device config paths while ambient PATH/config/secrets remain excluded.');
 }
 
 main();
