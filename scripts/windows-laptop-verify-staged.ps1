@@ -62,6 +62,35 @@ function Resolve-ValidationFailureCode {
     return 160
 }
 
+function Invoke-CapturedPowerShell {
+    param(
+        [Parameter(Mandatory = $true)][string]$PowerShellPath,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 can surface a native child's stderr as an
+        # ErrorRecord when streams are merged. The parent wrapper must capture
+        # that diagnostic text without allowing it to terminate classification.
+        $ErrorActionPreference = 'Continue'
+        $captured = @(
+            & $PowerShellPath @Arguments 2>&1 |
+                ForEach-Object { [string]$_ }
+        )
+        return [pscustomobject]@{
+            ExitCode = [int]$LASTEXITCODE
+            Output = @($captured)
+        }
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
+$windowsRoot = if ($env:SystemRoot) { $env:SystemRoot } elseif ($env:WINDIR) { $env:WINDIR } else { 'C:\Windows' }
+$powerShell = Join-Path $windowsRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+
 if ($SelfTest) {
     $cases = @(
         @{ Text = 'bootstrap failure'; Code = 101 },
@@ -77,32 +106,50 @@ if ($SelfTest) {
             throw "Staged verifier self-test mismatch. expected=$($case.Code) actual=$actual"
         }
     }
-    Write-Host 'PASS staged Windows laptop verifier failure-code mapping.'
+
+    if (Test-Path -LiteralPath $powerShell -PathType Leaf) {
+        $probe = Invoke-CapturedPowerShell -PowerShellPath $powerShell -Arguments @(
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            "[Console]::Error.WriteLine('nexus-staged-stderr-probe'); exit 7"
+        )
+        if ($probe.ExitCode -ne 7) {
+            throw "Native stderr capture self-test lost the child exit code. expected=7 actual=$($probe.ExitCode)"
+        }
+        if ((@($probe.Output) -join "`n") -notmatch 'nexus-staged-stderr-probe') {
+            throw 'Native stderr capture self-test did not retain the bounded diagnostic marker.'
+        }
+    }
+
+    Write-Host 'PASS staged Windows laptop verifier failure-code mapping and native stderr capture.'
     exit 0
 }
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $verifier = Join-Path $PSScriptRoot 'windows-laptop-verify.ps1'
-$windowsRoot = if ($env:SystemRoot) { $env:SystemRoot } elseif ($env:WINDIR) { $env:WINDIR } else { 'C:\Windows' }
-$powerShell = Join-Path $windowsRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
 if (-not (Test-Path -LiteralPath $repoRoot -PathType Container)) { exit 100 }
 if (-not (Test-Path -LiteralPath $verifier -PathType Leaf)) { exit 100 }
 if (-not (Test-Path -LiteralPath $powerShell -PathType Leaf)) { exit 100 }
 
 try {
-    $captured = @(
-        & $powerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $verifier -SkipInstall *>&1 |
-            ForEach-Object { [string]$_ }
+    $run = Invoke-CapturedPowerShell -PowerShellPath $powerShell -Arguments @(
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        $verifier,
+        '-SkipInstall'
     )
-    $childExit = $LASTEXITCODE
 }
 catch {
     exit 100
 }
 
-if ($childExit -eq 0) { exit 0 }
+if ($run.ExitCode -eq 0) { exit 0 }
 
-$text = $captured -join "`n"
+$text = @($run.Output) -join "`n"
 $code = Resolve-ValidationFailureCode -Text $text
 exit $code
